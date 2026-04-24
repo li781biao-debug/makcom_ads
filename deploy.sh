@@ -5,7 +5,7 @@
 set -e
 
 APP_DIR="/opt/makcom_ads"
-REPO_URL=""  # 填入你的 Git 仓库地址
+REPO_URL="https://github.com/li781biao-debug/makcom_ads.git"
 
 echo "=========================================="
 echo "  Makcom Ads 部署脚本"
