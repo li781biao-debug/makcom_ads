@@ -1,0 +1,241 @@
+// Prisma schema for makcom-ads
+// Architecture: Next.js UI -> Next.js API -> Make.com webhooks -> Meta Graph API
+// Token never leaves Make.com. DB stores only references and synced metadata.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== Auth / Multi-tenancy =====
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships   TenantUser[]
+  auditLogs     AuditLog[]
+}
+
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members        TenantUser[]
+  metaConnections MetaConnection[]
+  adAccounts     AdAccount[]
+  campaigns      Campaign[]
+  creatives      Creative[]
+  assets         Asset[]
+  auditLogs      AuditLog[]
+  makeJobs       MakeJob[]
+}
+
+enum TenantRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model TenantUser {
+  id        String     @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      TenantRole @default(MEMBER)
+  createdAt DateTime   @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+}
+
+// ===== Meta connection (token stays in Make) =====
+
+model MetaConnection {
+  id                String   @id @default(cuid())
+  tenantId          String
+  makeConnectionRef String   // opaque ID assigned by the Make scenario
+  fbUserId          String?
+  fbUserName        String?
+  status            String   @default("active") // active | revoked | error
+  connectedAt       DateTime @default(now())
+  lastUsedAt        DateTime?
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  adAccounts AdAccount[]
+
+  @@index([tenantId])
+}
+
+// ===== Meta domain objects (synced, not source of truth) =====
+
+model AdAccount {
+  id               String   @id @default(cuid())
+  tenantId         String
+  metaConnectionId String
+  actId            String   // e.g. "act_123456"
+  name             String
+  currency         String?
+  timezoneName     String?
+  status           Int?
+  syncedAt         DateTime @default(now())
+
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  metaConnection MetaConnection @relation(fields: [metaConnectionId], references: [id], onDelete: Cascade)
+  campaigns      Campaign[]
+  insights       InsightCache[]
+
+  @@unique([tenantId, actId])
+  @@index([metaConnectionId])
+}
+
+model Campaign {
+  id              String   @id @default(cuid())
+  tenantId        String
+  adAccountId     String
+  metaCampaignId  String
+  name            String
+  objective       String?
+  status          String?
+  dailyBudget     Int?     // cents
+  lifetimeBudget  Int?
+  syncedAt        DateTime @default(now())
+
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  adAccount  AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  adSets     AdSet[]
+
+  @@unique([adAccountId, metaCampaignId])
+  @@index([tenantId])
+}
+
+model AdSet {
+  id             String   @id @default(cuid())
+  campaignId     String
+  metaAdSetId    String
+  name           String
+  status         String?
+  dailyBudget    Int?
+  billingEvent   String?
+  optimizationGoal String?
+  syncedAt       DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@unique([campaignId, metaAdSetId])
+}
+
+model Ad {
+  id          String   @id @default(cuid())
+  adSetId     String
+  metaAdId    String
+  name        String
+  status      String?
+  creativeId  String?
+  syncedAt    DateTime @default(now())
+
+  adSet    AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  creative Creative? @relation(fields: [creativeId], references: [id])
+
+  @@unique([adSetId, metaAdId])
+}
+
+model Creative {
+  id              String   @id @default(cuid())
+  tenantId        String
+  metaCreativeId  String
+  name            String
+  objectStorySpec Json?
+  thumbnailUrl    String?
+  syncedAt        DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ads    Ad[]
+
+  @@unique([tenantId, metaCreativeId])
+}
+
+enum AssetType {
+  IMAGE
+  VIDEO
+}
+
+model Asset {
+  id              String    @id @default(cuid())
+  tenantId        String
+  type            AssetType
+  metaRef         String    // image_hash or video_id
+  filename        String?
+  previewUrl      String?
+  sizeBytes       Int?
+  createdAt       DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, type])
+}
+
+// ===== Insights cache =====
+
+model InsightCache {
+  id          String   @id @default(cuid())
+  adAccountId String
+  level       String   // account | campaign | adset | ad
+  dateRange   String   // e.g. "last_7d" or "2026-04-01_2026-04-14"
+  breakdowns  String?  // comma-separated breakdown keys
+  data        Json
+  fetchedAt   DateTime @default(now())
+
+  adAccount AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([adAccountId, level, dateRange, breakdowns])
+  @@index([fetchedAt])
+}
+
+// ===== Observability =====
+
+model MakeJob {
+  id         String   @id @default(cuid())
+  tenantId   String
+  scenario   String
+  status     String   // pending | success | error
+  request    Json
+  response   Json?
+  error      String?  @db.Text
+  durationMs Int?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([scenario, status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+  action    String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+}
