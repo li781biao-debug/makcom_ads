@@ -40,6 +40,14 @@ model Tenant {
   assets         Asset[]
   auditLogs      AuditLog[]
   makeJobs       MakeJob[]
+
+  shopifyDailyMetrics       ShopifyDailyMetric[]
+  metaCampaignDailies       MetaCampaignDaily[]
+  metaAdDailies             MetaAdDaily[]
+  metaBreakdownDailies      MetaBreakdownDaily[]
+  googleDailyMetrics        GoogleDailyMetric[]
+  googleCampaignTypeDailies GoogleCampaignTypeDaily[]
+  googleBreakdownDailies    GoogleBreakdownDaily[]
 }
 
 enum TenantRole {
@@ -238,4 +246,189 @@ model AuditLog {
   user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
+}
+
+// ===== BI / Analytics fact tables =====
+// Populated by Make.com scenarios that query Shopify, Meta Ads, Google Ads APIs and
+// transform the result rows into the shapes below. Read by Looker Studio (or our own
+// dashboards) for visualization.
+//
+// Pattern: Make.com POSTs an array of rows to /api/insights/<source>/<grain> with header
+// X-Make-Secret. Each row is upserted by its natural key (see @@unique below).
+
+// ---- Shopify (Overview tab: Total sales, Orders, Returns, AOV, ROI) ----
+
+model ShopifyDailyMetric {
+  id          String   @id @default(cuid())
+  tenantId    String
+  date        DateTime @db.Date
+  totalSales  Decimal  @db.Decimal(18, 2)
+  orders      Int      @default(0)
+  returns     Int      @default(0)
+  currency    String   @default("USD")
+  fetchedAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+}
+
+// ---- Meta Ads (Facebook, Instagram, Messenger, WhatsApp, Threads) ----
+
+// Daily campaign-level rollup. Drives the Campaigns table and Meta time-series chart.
+model MetaCampaignDaily {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  date               DateTime @db.Date
+  accountId          String
+  accountName        String?
+  campaignId         String
+  campaignName       String
+  campaignObjective  String?
+  impressions        BigInt   @default(0)
+  clicksAll          BigInt   @default(0)
+  spend              Decimal  @db.Decimal(18, 4) @default(0)
+  purchases          Int      @default(0)
+  purchaseConvValue  Decimal  @db.Decimal(18, 2) @default(0)
+  addsToCart         Int      @default(0)
+  initiatedCheckouts Int      @default(0)
+  cpm                Decimal? @db.Decimal(10, 4)
+  cpcAll             Decimal? @db.Decimal(10, 4)
+  ctrAll             Decimal? @db.Decimal(10, 6)
+  roas               Decimal? @db.Decimal(10, 4)
+  fetchedAt          DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date, campaignId])
+  @@index([tenantId, date])
+  @@index([tenantId, campaignId])
+}
+
+// Daily ad-level rollup. Drives the Creatives table.
+model MetaAdDaily {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  date               DateTime @db.Date
+  accountId          String
+  campaignId         String
+  adsetId            String
+  adsetName          String?
+  adId               String
+  adName             String
+  adCreativeImageUrl String?  @db.Text
+  adBody             String?  @db.Text
+  impressions        BigInt   @default(0)
+  clicksAll          BigInt   @default(0)
+  spend              Decimal  @db.Decimal(18, 4) @default(0)
+  websitePurchases   Int      @default(0)
+  purchaseConvValue  Decimal  @db.Decimal(18, 2) @default(0)
+  cpm                Decimal? @db.Decimal(10, 4)
+  cpcAll             Decimal? @db.Decimal(10, 4)
+  ctrAll             Decimal? @db.Decimal(10, 6)
+  roas               Decimal? @db.Decimal(10, 4)
+  fetchedAt          DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date, adId])
+  @@index([tenantId, date])
+  @@index([tenantId, adId])
+}
+
+// Generic daily Meta breakdowns. breakdownType ∈
+//   country | publisher_platform | promoted_object | landing_page | age_gender | device_platform
+// dim1 holds the primary key (country code, platform name, landing URL, age range, device, promoted_object signature).
+// dim2 holds gender when breakdownType=age_gender, otherwise empty string.
+// dimMeta optionally stores the full structured object (e.g. promoted_object full json from Meta).
+model MetaBreakdownDaily {
+  id                String   @id @default(cuid())
+  tenantId          String
+  date              DateTime @db.Date
+  breakdownType     String
+  dim1              String   @db.VarChar(255)
+  dim2              String   @default("") @db.VarChar(128)
+  dimMeta           Json?
+  impressions       BigInt   @default(0)
+  clicksAll         BigInt   @default(0)
+  spend             Decimal  @db.Decimal(18, 4) @default(0)
+  purchases         Int      @default(0)
+  purchaseConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  roas              Decimal? @db.Decimal(10, 4)
+  fetchedAt         DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date, breakdownType, dim1, dim2])
+  @@index([tenantId, breakdownType, date])
+}
+
+// ---- Google Ads ----
+
+// Daily account-level rollup. Drives Google Key Metrics and time-series chart.
+model GoogleDailyMetric {
+  id             String   @id @default(cuid())
+  tenantId       String
+  date           DateTime @db.Date
+  impressions    BigInt   @default(0)
+  clicks         BigInt   @default(0)
+  cost           Decimal  @db.Decimal(18, 4) @default(0)
+  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  purchases      Int      @default(0)
+  addsToCart     Int      @default(0)
+  beginsCheckout Int      @default(0)
+  avgCpc         Decimal? @db.Decimal(10, 4)
+  ctr            Decimal? @db.Decimal(10, 6)
+  fetchedAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+}
+
+// Daily by Google campaign type (Performance Max / Search / Shopping / Video / Discovery / Display).
+model GoogleCampaignTypeDaily {
+  id             String   @id @default(cuid())
+  tenantId       String
+  date           DateTime @db.Date
+  campaignType   String
+  clicks         BigInt   @default(0)
+  cost           Decimal  @db.Decimal(18, 4) @default(0)
+  purchases      Int      @default(0)
+  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  roas           Decimal? @db.Decimal(10, 4)
+  fetchedAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date, campaignType])
+  @@index([tenantId, date])
+}
+
+// Generic daily Google breakdowns. breakdownType ∈
+//   search_term_search | search_term_shopping | top_product_shopping | final_url
+//   | country | conv_value_gender | conv_value_age | conv_value_device
+// dim1 = search_term / product_title / final_url / country / gender / age range / device
+// dim2 = advertising_channel_type (only used for final_url; otherwise empty string)
+model GoogleBreakdownDaily {
+  id             String   @id @default(cuid())
+  tenantId       String
+  date           DateTime @db.Date
+  breakdownType  String
+  dim1           String   @db.VarChar(255)
+  dim2           String   @default("") @db.VarChar(128)
+  dimMeta        Json?
+  clicks         BigInt   @default(0)
+  cost           Decimal  @db.Decimal(18, 4) @default(0)
+  purchases      Int      @default(0)
+  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  allConvValue   Decimal? @db.Decimal(18, 2)
+  fetchedAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, date, breakdownType, dim1, dim2])
+  @@index([tenantId, breakdownType, date])
 }

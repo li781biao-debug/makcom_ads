@@ -10,7 +10,10 @@ export default auth((req) => {
 
   const isAuthPage = pathname.startsWith("/login") || pathname.startsWith("/register");
   const isApiAuth = pathname.startsWith("/api/auth");
-  const isPublicApi = pathname.startsWith("/api/meta/callback") || pathname.startsWith("/api/register");
+  const isPublicApi =
+    pathname.startsWith("/api/meta/callback") ||
+    pathname.startsWith("/api/register") ||
+    pathname.startsWith("/api/insights");
 
   if (isApiAuth || isPublicApi) return NextResponse.next();
 
