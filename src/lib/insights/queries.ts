@@ -26,7 +26,7 @@ export function pctDelta(curr: number, prev: number): number | null {
 }
 
 const dec = (v: Prisma.Decimal | null | undefined) => Number(v ?? 0);
-const big = (v: bigint | null | undefined) => Number(v ?? 0n);
+const big = (v: bigint | null | undefined) => Number(v ?? BigInt(0));
 
 // ---- Shopify aggregate ----
 export async function shopifyAggregate(tenantId: string, r: DateRange) {
