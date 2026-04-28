@@ -7,7 +7,6 @@ const NAV = [
   { href: "/", label: "概览" },
   { href: "/reports", label: "数据报表" },
   { href: "/connections", label: "账号连接" },
-  { href: "/insights", label: "数据看板" },
   { href: "/campaigns", label: "广告系列" },
   { href: "/adsets", label: "广告组" },
   { href: "/ads", label: "广告" },
