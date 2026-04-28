@@ -1,0 +1,120 @@
+{
+  "name": "01 - Shopify Daily Metrics → makcom_ads",
+  "flow": [
+    {
+      "id": 1,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "yesterday",
+            "value": "{{formatDate(addDays(now; -1); \"YYYY-MM-DD\")}}"
+          },
+          {
+            "name": "yesterday_iso_start",
+            "value": "{{formatDate(addDays(now; -1); \"YYYY-MM-DD\")}}T00:00:00Z"
+          },
+          {
+            "name": "yesterday_iso_end",
+            "value": "{{formatDate(addDays(now; -1); \"YYYY-MM-DD\")}}T23:59:59Z"
+          }
+        ],
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": {},
+        "expect": [
+          {
+            "name": "variables",
+            "type": "array",
+            "label": "Variables",
+            "spec": [
+              { "name": "name", "type": "text", "label": "Variable name" },
+              { "name": "value", "type": "any", "label": "Variable value" }
+            ]
+          },
+          { "name": "scope", "type": "select", "label": "Variable lifetime" }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "module": "datastore:GetRecord",
+      "version": 1,
+      "parameters": { "datastore": null },
+      "mapper": { "key": "config" },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "note": "Replace `datastore` with the id of your `makcom_ads_config` data store. Record `config` should hold: tenant_id, make_secret, api_base, shopify_shop"
+      }
+    },
+    {
+      "id": 99,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": { "handleErrors": false, "useNewZLibDeCompress": true },
+      "mapper": {
+        "url": "{{2.api_base}}/api/insights/shopify/daily",
+        "method": "post",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "ca": "",
+        "qs": [],
+        "bodyType": "raw",
+        "parseResponse": true,
+        "authUser": "",
+        "authPass": "",
+        "timeout": "30",
+        "headers": [
+          { "name": "X-Make-Secret", "value": "{{2.make_secret}}" },
+          { "name": "Content-Type", "value": "application/json" }
+        ],
+        "contentType": "application/json",
+        "rejectUnauthorized": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "gzip": true,
+        "useMtls": false,
+        "data": "{\n  \"tenant_id\": \"{{2.tenant_id}}\",\n  \"rows\": [\n    {\n      \"date\": \"{{1.yesterday}}\",\n      \"total_sales\": \"{{REPLACE_WITH_AGGREGATOR_total_sales}}\",\n      \"orders\": {{REPLACE_WITH_AGGREGATOR_orders}},\n      \"returns\": {{REPLACE_WITH_AGGREGATOR_returns}},\n      \"currency\": \"USD\"\n    }\n  ]\n}",
+        "followAllRedirects": false
+      },
+      "metadata": {
+        "designer": { "x": 1200, "y": 0 },
+        "note": "Insert (between modules 2 and 99): (3) Shopify List Orders [filter created_at_min={{1.yesterday_iso_start}} created_at_max={{1.yesterday_iso_end}}], (4) Numeric Aggregator [SUM(total_price) → total_sales, COUNT → orders], (5) Shopify List Refunds [filter processed_at>={{1.yesterday_iso_start}}], (6) Numeric Aggregator [COUNT → returns]. Then update body data above to reference {{4.total_sales}}, {{4.orders}}, {{6.returns}}.",
+        "expect": [
+          { "name": "url", "type": "url", "label": "URL", "required": true },
+          { "name": "method", "type": "select", "label": "Method" }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false,
+      "slots": null
+    },
+    "designer": { "orphans": [] },
+    "zone": "eu2.make.com",
+    "notes": [
+      {
+        "moduleIds": [],
+        "content": "<p>Phase 1 / Scenario 1: Shopify daily metrics → POST /api/insights/shopify/daily</p><p>Add Shopify List Orders + aggregators between modules 2 and 99 (see HTTP module note).</p>",
+        "isFilterNote": false,
+        "metadata": { "color": "#FAEFD0" }
+      }
+    ]
+  }
+}

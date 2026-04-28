@@ -1,0 +1,113 @@
+{
+  "name": "03 - Google Ads Account Daily → makcom_ads",
+  "flow": [
+    {
+      "id": 1,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "yesterday",
+            "value": "{{formatDate(addDays(now; -1); \"YYYY-MM-DD\")}}"
+          },
+          {
+            "name": "gaql_query",
+            "value": "SELECT segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.average_cpc, metrics.ctr FROM customer WHERE segments.date = '{{formatDate(addDays(now; -1); \"YYYY-MM-DD\")}}'"
+          }
+        ],
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": {},
+        "expect": [
+          {
+            "name": "variables",
+            "type": "array",
+            "label": "Variables",
+            "spec": [
+              { "name": "name", "type": "text" },
+              { "name": "value", "type": "any" }
+            ]
+          },
+          { "name": "scope", "type": "select" }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "module": "datastore:GetRecord",
+      "version": 1,
+      "parameters": { "datastore": null },
+      "mapper": { "key": "config" },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "note": "Record `config` should hold: tenant_id, make_secret, api_base, google_customer_id (no dashes), google_login_customer_id (manager id, optional)"
+      }
+    },
+    {
+      "id": 99,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": { "handleErrors": false, "useNewZLibDeCompress": true },
+      "mapper": {
+        "url": "{{2.api_base}}/api/insights/google/daily",
+        "method": "post",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "ca": "",
+        "qs": [],
+        "bodyType": "raw",
+        "parseResponse": true,
+        "authUser": "",
+        "authPass": "",
+        "timeout": "30",
+        "headers": [
+          { "name": "X-Make-Secret", "value": "{{2.make_secret}}" },
+          { "name": "Content-Type", "value": "application/json" }
+        ],
+        "contentType": "application/json",
+        "rejectUnauthorized": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "gzip": true,
+        "useMtls": false,
+        "data": "{\n  \"tenant_id\": \"{{2.tenant_id}}\",\n  \"rows\": [\n    {\n      \"date\": \"{{1.yesterday}}\",\n      \"impressions\": {{REPLACE_AGG_impressions}},\n      \"clicks\": {{REPLACE_AGG_clicks}},\n      \"cost\": \"{{ REPLACE_AGG_cost_micros / 1000000 }}\",\n      \"total_conv_value\": \"{{REPLACE_AGG_conversions_value}}\",\n      \"purchases\": {{ floor(REPLACE_AGG_conversions) }},\n      \"adds_to_cart\": 0,\n      \"begins_checkout\": 0,\n      \"avg_cpc\": \"{{ REPLACE_AGG_average_cpc / 1000000 }}\",\n      \"ctr\": \"{{REPLACE_AGG_ctr}}\"\n    }\n  ]\n}",
+        "followAllRedirects": false
+      },
+      "metadata": {
+        "designer": { "x": 1200, "y": 0 },
+        "note": "Insert (between modules 2 and 99): (3) Google Ads → Search (or Search Stream). Customer ID = {{2.google_customer_id}}. Login customer ID = {{2.google_login_customer_id}} (if MCC). Query = {{1.gaql_query}}. (4) Numeric Aggregator → SUM(metrics.impressions / clicks / cost_micros / conversions / conversions_value), AVG(metrics.average_cpc / ctr). Then replace REPLACE_AGG_* placeholders above with {{4.<field>}}.",
+        "expect": [{ "name": "url", "type": "url", "label": "URL", "required": true }]
+      }
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false,
+      "slots": null
+    },
+    "designer": { "orphans": [] },
+    "zone": "eu2.make.com",
+    "notes": [
+      {
+        "moduleIds": [],
+        "content": "<p>Phase 1 / Scenario 3: Google Ads daily → POST /api/insights/google/daily</p><p><b>Critical conversions:</b><br>• <code>cost_micros</code> ÷ 1,000,000 → cost in dollars<br>• <code>average_cpc</code> ÷ 1,000,000 → CPC in dollars<br>• <code>ctr</code> already a decimal (no division)<br>• <code>conversions</code> is float; floor() to get integer purchases.</p>",
+        "isFilterNote": false,
+        "metadata": { "color": "#FAEFD0" }
+      }
+    ]
+  }
+}

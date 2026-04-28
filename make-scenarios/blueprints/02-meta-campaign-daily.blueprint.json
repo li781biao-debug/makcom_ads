@@ -1,0 +1,111 @@
+{
+  "name": "02 - Meta Campaign Daily → makcom_ads",
+  "flow": [
+    {
+      "id": 1,
+      "module": "util:SetVariables",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "variables": [
+          {
+            "name": "yesterday",
+            "value": "{{formatDate(addDays(now; -1); \"YYYY-MM-DD\")}}"
+          }
+        ],
+        "scope": "roundtrip"
+      },
+      "metadata": {
+        "designer": { "x": 0, "y": 0 },
+        "restore": {},
+        "expect": [
+          {
+            "name": "variables",
+            "type": "array",
+            "label": "Variables",
+            "spec": [
+              { "name": "name", "type": "text" },
+              { "name": "value", "type": "any" }
+            ]
+          },
+          { "name": "scope", "type": "select" }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "module": "datastore:GetRecord",
+      "version": 1,
+      "parameters": { "datastore": null },
+      "mapper": { "key": "config" },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 },
+        "note": "Replace `datastore` with your `makcom_ads_config` id. Record `config` should hold: tenant_id, make_secret, api_base, meta_ad_account_id"
+      }
+    },
+    {
+      "id": 99,
+      "module": "http:ActionSendData",
+      "version": 3,
+      "parameters": { "handleErrors": false, "useNewZLibDeCompress": true },
+      "mapper": {
+        "url": "{{2.api_base}}/api/insights/meta/campaign-daily",
+        "method": "post",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "ca": "",
+        "qs": [],
+        "bodyType": "raw",
+        "parseResponse": true,
+        "authUser": "",
+        "authPass": "",
+        "timeout": "60",
+        "headers": [
+          { "name": "X-Make-Secret", "value": "{{2.make_secret}}" },
+          { "name": "Content-Type", "value": "application/json" }
+        ],
+        "contentType": "application/json",
+        "rejectUnauthorized": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "gzip": true,
+        "useMtls": false,
+        "data": "{\n  \"tenant_id\": \"{{2.tenant_id}}\",\n  \"rows\": {{REPLACE_WITH_ARRAY_AGGREGATOR_OUTPUT}}\n}",
+        "followAllRedirects": false
+      },
+      "metadata": {
+        "designer": { "x": 1500, "y": 0 },
+        "note": "Insert (between modules 2 and 99): (3) Facebook Marketing API → Make API Call. URL: /v22.0/{{2.meta_ad_account_id}}/insights ; method=GET ; querystring level=campaign, time_range={\"since\":\"{{1.yesterday}}\",\"until\":\"{{1.yesterday}}\"}, fields=campaign_id,campaign_name,objective,account_id,account_name,impressions,clicks,spend,cpm,cpc,ctr,actions,action_values. (4) Iterator over [3].data. (5) Set variables to extract omni_purchases, omni_purchase_value, omni_add_to_cart, omni_initiated_checkout from {{4.actions}} / {{4.action_values}}. (6) Array aggregator over (4)+(5) building objects matching MetaCampaignDailyRow schema. Then replace {{REPLACE_WITH_ARRAY_AGGREGATOR_OUTPUT}} above with {{6.array}}.",
+        "expect": [
+          { "name": "url", "type": "url", "label": "URL", "required": true }
+        ]
+      }
+    }
+  ],
+  "metadata": {
+    "instant": false,
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "autoCommitTriggerLast": true,
+      "sequential": false,
+      "confidential": false,
+      "dataloss": false,
+      "dlq": false,
+      "freshVariables": false,
+      "slots": null
+    },
+    "designer": { "orphans": [] },
+    "zone": "eu2.make.com",
+    "notes": [
+      {
+        "moduleIds": [],
+        "content": "<p>Phase 1 / Scenario 2: Meta campaign-daily → POST /api/insights/meta/campaign-daily</p><p><b>One row per (campaign, day)</b>. CTR returned by Meta is in % (e.g. 1.23 = 1.23%) — divide by 100 for our schema. Use omni_* action_types to match the Tenniix dashboard, not the web-only purchase / add_to_cart.</p><p>Body row template (paste into the Array Aggregator's record builder):</p><pre>{\n  \"date\": \"{{1.yesterday}}\",\n  \"account_id\": \"{{4.account_id}}\",\n  \"account_name\": \"{{4.account_name}}\",\n  \"campaign_id\": \"{{4.campaign_id}}\",\n  \"campaign_name\": \"{{4.campaign_name}}\",\n  \"campaign_objective\": \"{{4.objective}}\",\n  \"impressions\": \"{{4.impressions}}\",\n  \"clicks_all\": \"{{4.clicks}}\",\n  \"spend\": \"{{4.spend}}\",\n  \"purchases\": {{5.omni_purchases}},\n  \"purchase_conv_value\": \"{{5.omni_purchase_value}}\",\n  \"adds_to_cart\": {{5.omni_add_to_cart}},\n  \"initiated_checkouts\": {{5.omni_initiated_checkout}},\n  \"cpm\": \"{{4.cpm}}\",\n  \"cpc_all\": \"{{4.cpc}}\",\n  \"ctr_all\": \"{{ 4.ctr / 100 }}\",\n  \"roas\": \"{{ 5.omni_purchase_value / 4.spend }}\"\n}</pre>",
+        "isFilterNote": false,
+        "metadata": { "color": "#FAEFD0" }
+      }
+    ]
+  }
+}
