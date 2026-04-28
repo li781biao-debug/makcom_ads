@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { getPrimaryTenant } from "@/lib/tenant";
+import { ConnectButton } from "@/components/meta/ConnectButton";
 
 export default async function ConnectionsPage() {
   const session = await auth();
@@ -18,12 +19,7 @@ export default async function ConnectionsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Meta 账号连接</h1>
-        <a
-          href="/api/meta/connect"
-          className="rounded bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700"
-        >
-          连接 Meta 账号
-        </a>
+        <ConnectButton />
       </div>
 
       {connections.length === 0 ? (

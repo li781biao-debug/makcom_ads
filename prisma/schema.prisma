@@ -234,6 +234,20 @@ model MakeJob {
   @@index([scenario, status])
 }
 
+// ===== OAuth state nonce (Meta connect flow) =====
+
+model OAuthState {
+  state     String   @id @db.VarChar(96)
+  tenantId  String
+  userId    String?
+  purpose   String   @default("meta_connect")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
 model AuditLog {
   id        String   @id @default(cuid())
   tenantId  String
