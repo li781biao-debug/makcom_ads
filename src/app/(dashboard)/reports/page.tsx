@@ -8,11 +8,13 @@ import {
   metaAggregate,
   googleAggregate,
   shopifyDailySeries,
+  lastFetchedAt,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct } from "@/components/insights/Kpi";
 import { LineChart } from "@/components/insights/LineChart";
 import { DataTable, Col } from "@/components/insights/DataTable";
 import { DateRangeBar } from "@/components/insights/DateRangeBar";
+import { Freshness } from "@/components/insights/Freshness";
 
 type Channel = {
   channel: string;
@@ -37,7 +39,7 @@ export default async function ReportsOverviewPage({
   const range = defaultRange(days);
   const prev = previousRange(range);
 
-  const [shopify, meta, google, prevShopify, prevMeta, prevGoogle, series] = await Promise.all([
+  const [shopify, meta, google, prevShopify, prevMeta, prevGoogle, series, fresh] = await Promise.all([
     shopifyAggregate(tenant.id, range),
     metaAggregate(tenant.id, range),
     googleAggregate(tenant.id, range),
@@ -45,6 +47,7 @@ export default async function ReportsOverviewPage({
     metaAggregate(tenant.id, prev),
     googleAggregate(tenant.id, prev),
     shopifyDailySeries(tenant.id, range),
+    lastFetchedAt(tenant.id),
   ]);
 
   const adCost = meta.spend + google.cost;
@@ -92,7 +95,10 @@ export default async function ReportsOverviewPage({
 
   return (
     <div className="space-y-8">
-      <DateRangeBar active={days} basePath="/reports" />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <DateRangeBar active={days} basePath="/reports" />
+        <Freshness shopify={fresh.shopify} meta={fresh.meta} google={fresh.google} />
+      </div>
 
       <section>
         <h2 className="text-base font-medium mb-3">Shopify 表现</h2>

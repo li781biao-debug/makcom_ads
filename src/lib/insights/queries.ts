@@ -306,6 +306,30 @@ export async function googleCampaignTypeAggregate(tenantId: string, r: DateRange
   });
 }
 
+// ---- Last data refresh timestamp per source ----
+
+export async function lastFetchedAt(tenantId: string) {
+  const [shopify, metaCamp, metaAd, metaBk, gDaily, gType, gBk] = await Promise.all([
+    prisma.shopifyDailyMetric.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+    prisma.metaCampaignDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+    prisma.metaAdDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+    prisma.metaBreakdownDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+    prisma.googleDailyMetric.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+    prisma.googleCampaignTypeDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+    prisma.googleBreakdownDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
+  ]);
+  const maxOf = (...dates: (Date | null | undefined)[]): Date | null => {
+    const valid = dates.filter((d): d is Date => d != null);
+    if (valid.length === 0) return null;
+    return new Date(Math.max(...valid.map((d) => d.getTime())));
+  };
+  return {
+    shopify: shopify._max.fetchedAt ?? null,
+    meta: maxOf(metaCamp._max.fetchedAt, metaAd._max.fetchedAt, metaBk._max.fetchedAt),
+    google: maxOf(gDaily._max.fetchedAt, gType._max.fetchedAt, gBk._max.fetchedAt),
+  };
+}
+
 export async function googleBreakdownTop(
   tenantId: string,
   r: DateRange,
