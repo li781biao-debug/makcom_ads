@@ -35,7 +35,7 @@ Make.com 内置 **Facebook Insights** 应用已经处理 OAuth + 字段选择 + 
 |---|---|
 | tenant_id | `cmogsd46v0001mw016lgb3dzz` |
 | make_secret | 上面 A 拿到的 MAKE_SHARED_SECRET |
-| api_base | `http://47.251.57.66:8090` |
+| api_base | `https://api.metraxis.me` |
 | meta_account_id | `act_xxxxxxxxxxxxxxxx`（你的 Meta 广告账号；用于 Google Ads 不相关）|
 | google_customer_id | `1234567890`（去横线）|
 | google_login_customer_id | （可选，MCC ID）|
@@ -440,7 +440,7 @@ Body：
 
 ## 验证 — 看板有数据
 
-数据进 DB 后立即去 [http://47.251.57.66:8090/reports](http://47.251.57.66:8090/reports) 看：
+数据进 DB 后立即去 [https://api.metraxis.me/reports](https://api.metraxis.me/reports) 看：
 - Overview 上有 Shopify 销售卡 + 总折线
 - Meta 标签页有 KPI + 时间序列 + Campaigns 表 + 5 个 breakdown 表/饼
 - Google 标签页有 KPI + 时间序列 + Campaign types + 5 个 breakdown 表/饼
