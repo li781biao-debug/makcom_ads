@@ -1,211 +1,161 @@
-# Phase 1 Make.com Scenarios
+# Make.com Scenarios — 完整配置清单
 
-Four daily scenarios to populate the BI fact tables that back `/reports`. Once these run, the **Overview / Meta KPI / Google KPI** sections of the dashboard plus all time-series charts and the **Top campaign types** table light up.
+把 3 个平台（Shopify / Meta / Google）的数据接入看板，最少 **5 个 scenario** 跑完。设计原则：**Make.com 只做"取数 → 转发"，所有数据处理和转化放在业务端**（我们的 API 端点）。
 
 ```
-┌─────────────┐  ┌──────────────────┐  ┌─────────────────┐  ┌──────────────┐
-│   Shopify   │  │   Meta Insights  │  │  Google Ads     │  │ Google Ads   │
-│   Orders    │  │  (campaign lvl)  │  │ (account lvl)   │  │ (by ch type) │
-└──────┬──────┘  └─────────┬────────┘  └────────┬────────┘  └──────┬───────┘
-       │ POST            │ POST              │ POST              │ POST
-       ▼                 ▼                   ▼                   ▼
- /api/insights/    /api/insights/      /api/insights/     /api/insights/
-   shopify/         meta/campaign-       google/            google/
-   daily            daily                daily              campaign-type
+Shopify  ─[1] daily orders ──────▶ /api/insights/shopify/daily ─▶ ShopifyDailyMetric
+Meta     ─[2] campaign+ad daily ─▶ /api/insights/meta/{campaign,ad}-daily ─▶ MetaCampaignDaily / MetaAdDaily
+Meta     ─[3] breakdowns 循环 ──▶ /api/insights/meta/breakdown ─▶ MetaBreakdownDaily
+Google   ─[4] daily+by_type ────▶ /api/insights/google/{daily,campaign-type} ─▶ GoogleDailyMetric / Type
+Google   ─[5] breakdowns 循环 ──▶ /api/insights/google/breakdown ─▶ GoogleBreakdownDaily
 ```
-
-## Prerequisites — set up once in Make.com
-
-### 1. Connections
-
-| 模块 | 在 Make.com 里需要的连接 |
-|---|---|
-| Shopify | Shopify private/custom app or OAuth connection to your store |
-| Meta Marketing API | Facebook for Business connection with `ads_read` scope |
-| Google Ads | Google Ads connection (developer token + customer id + manager id if applicable) |
-
-### 2. Data store (sharing tenant_id and secret across scenarios)
-
-In Make.com → **Data stores → Add data store** → `makcom_ads_config` with these records:
-
-| key | value |
-|---|---|
-| `tenant_id` | (从 Tenant 表查出来你自己 `biao` 的 id) |
-| `make_secret` | 服务器 `/opt/makcom_ads/.env.production` 里的 `MAKE_SHARED_SECRET` |
-| `api_base` | `http://47.251.57.66:8090` |
-| `meta_ad_account_id` | e.g. `act_1234567890` |
-| `google_customer_id` | e.g. `1234567890` (无破折号) |
-| `shopify_shop` | e.g. `tenniix.myshopify.com` |
-
-每个 scenario 用 **Data store → Get a record** 拿这些值，避免硬编码。
-
-### 3. Schedule
-
-每个 scenario：daily at **02:00 UTC**（北京/上海时间 10:00），拉**昨天**整天的数据。Meta/Google API 通常 T+1 才完整，更早跑会拿到不全的数据。
-
-### 4. Error handling
-
-每个 scenario 主流程末尾加一个 **HTTP module → POST** 到我们后端的失败回报（可选，先跳过；Make.com 自带 scenario history 已经够用）。Make.com → scenario settings → **"Auto-commit triggers" 关闭、"Number of consecutive errors" 设 3**。
 
 ---
 
-## Common pieces (4 个 scenario 共享的模式)
+## 一次性准备
 
-### A. 计算"昨天"日期
+### A. 服务器端 secret 和 tenant_id
 
-Make.com 表达式：
+```bash
+ssh root@47.251.57.66 'grep MAKE_SHARED_SECRET /opt/makcom_ads/.env.production'
+# tenant_id 已知：cmogsd46v0001mw016lgb3dzz （biao 工作区）
 ```
-{{formatDate(addDays(now; -1); "YYYY-MM-DD")}}
+
+### B. Meta：拿一个 System User Token（永不过期）
+
+1. [business.facebook.com](https://business.facebook.com) → Business Settings → Users → System Users → Add
+2. 给它 Admin 权限，名称如 `makcom-bot`
+3. 选中后点 **Generate New Token** → 选你的 App → 勾 `ads_read`、`business_management` → 生成
+4. 把 token 复制下来（**永久有效**）
+5. 在 Business Settings → 把要管的广告账号加进 System User 的资源（Ad Accounts → Assign）
+
+### C. Make.com Data Store（共享配置）
+
+新建一个 Data Store，名字 `makcom_config`，有一条记录 `key=cfg`：
+
+| field | value |
+|---|---|
+| tenant_id | `cmogsd46v0001mw016lgb3dzz` |
+| make_secret | 上面 A 拿到的 MAKE_SHARED_SECRET |
+| api_base | `http://47.251.57.66:8090` |
+| meta_token | 上面 B 拿到的 System User Token |
+| meta_account_id | `act_xxxxxxxxxxxxxxxx`（你的 Meta 广告账号）|
+| google_customer_id | `1234567890`（去横线）|
+| google_login_customer_id | （可选，MCC ID）|
+| shopify_shop | `tenniix.myshopify.com` |
+
+每个 scenario 第一步都是 `Data Store → Get a Record (key=cfg)`，后续模块直接用 `{{2.tenant_id}}` 等引用。
+
+### D. 通用模块模板
+
+每个 scenario 都有这两个固定模块：
+
+**模块 1 — Set Variables**
+```
+yesterday = {{formatDate(addDays(now; -1); "YYYY-MM-DD")}}
 ```
 
-放在第一个 Set Variables 模块里，命名为 `yesterday`，后续模块直接引用 `{{1.yesterday}}`。
-
-### B. 通用 HTTP POST 配置
-
-每个 scenario 末尾的 HTTP 模块都长这样：
+**模块末尾 — HTTP → Make a request**
 
 | 字段 | 值 |
 |---|---|
-| URL | `{{2.api_base}}/api/insights/<endpoint>` |
-| Method | `POST` |
-| Headers | `X-Make-Secret: {{2.make_secret}}` 和 `Content-Type: application/json` |
+| URL | `{{2.api_base}}/api/insights/<...>` |
+| Method | POST |
+| Headers | `X-Make-Secret: {{2.make_secret}}` + `Content-Type: application/json` |
 | Body type | Raw |
 | Content type | application/json |
-| Request content | 见下面每个 scenario 的 body 模板 |
-| Parse response | Yes |
-| Reject unauthorized | Yes |
-
-成功响应：`{"ok":true,"data":{"upserted":N}}`，N 应该等于发送的 rows 数量。
+| Request content | 见下方每个 scenario 的 body 模板 |
 
 ---
 
-## Scenario 1 — Shopify daily metrics
+## Scenario 1 — Shopify daily orders
 
 **目标表**：`ShopifyDailyMetric`
-**端点**：`POST /api/insights/shopify/daily`
 **频率**：每日 02:00 UTC
 
-### 模块流
-
 ```
-[1] Set variables (yesterday = ...)
-    │
-    ▼
-[2] Data store → Get a record (key = "config")  // 拿 tenant_id / make_secret / shopify_shop
-    │
-    ▼
+[1] Set vars (yesterday)
+[2] Data Store → cfg
 [3] Shopify → List orders
-    Filter: created_at_min = {{1.yesterday}}T00:00:00Z
-            created_at_max = {{1.yesterday}}T23:59:59Z
-            status = any
-    Limit:  250 per page，Make.com 自动翻页
-    │
-    ▼
-[4] Aggregator → Numeric aggregator(s)
-    Source: [3]
-    Aggregate functions:
-      - SUM(total_price) → total_sales
-      - COUNT(orders)    → orders
-    Group by: (none — single row)
-    │
-    ▼
-[5] Shopify → List refunds (可选)
-    Filter: processed_at >= {{1.yesterday}}T00:00:00Z
-    │
-    ▼
-[6] Aggregator → COUNT → returns
-    │
-    ▼
-[7] HTTP → POST /api/insights/shopify/daily
+       created_at_min: {{1.yesterday}}T00:00:00Z
+       created_at_max: {{1.yesterday}}T23:59:59Z
+       status: any
+       limit: 250 (auto-paginate)
+[4] Numeric Aggregator
+       SUM(total_price) → total_sales
+       COUNT → orders
+       SUM(refund_count) → returns（如果你 Shopify 有 refund 关联，否则填 0）
+[5] HTTP POST → /api/insights/shopify/daily
 ```
 
-### HTTP body
-
+Body：
 ```json
 {
   "tenant_id": "{{2.tenant_id}}",
-  "rows": [
-    {
-      "date": "{{1.yesterday}}",
-      "total_sales": "{{4.total_sales}}",
-      "orders": {{4.orders}},
-      "returns": {{6.returns}},
-      "currency": "USD"
-    }
-  ]
+  "rows": [{
+    "date": "{{1.yesterday}}",
+    "total_sales": "{{4.total_sales}}",
+    "orders": {{4.orders}},
+    "returns": {{4.returns}},
+    "currency": "USD"
+  }]
 }
 ```
-
-### 字段映射
-
-| Shopify 原字段 | 我们的字段 | 说明 |
-|---|---|---|
-| `total_price`（每单累加）| `total_sales` | 含税含运费的销售额；如要去掉运费用 `subtotal_price` |
-| 订单数 | `orders` | `COUNT()` |
-| `Refund` 记录数 | `returns` | 简化版；如果你定义"returns"是退款金额而非笔数，把 SUM(refund.transactions[].amount) 替换 |
-| 固定 | `currency` | 单店铺固定 USD。多币种店铺要从 `presentment_currency` 取 |
 
 ---
 
-## Scenario 2 — Meta Insights campaign-daily
+## Scenario 2 — Meta campaign + ad daily
 
-**目标表**：`MetaCampaignDaily`
-**端点**：`POST /api/insights/meta/campaign-daily`
+**目标表**：`MetaCampaignDaily` + `MetaAdDaily`
 **频率**：每日 02:00 UTC
 
-### 模块流
+Meta Insights API 一次只能查一个 level，所以这个 scenario 跑两次 API 调用。
 
 ```
-[1] Set variables (yesterday)
-    │
-    ▼
-[2] Data store → Get config
-    │
-    ▼
-[3] Facebook Marketing API → Make API Call
-    URL: /v22.0/{{2.meta_ad_account_id}}/insights
-    Method: GET
-    Query params:
-      level = campaign
-      time_range = {"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
-      fields = campaign_id,campaign_name,objective,account_id,account_name,impressions,clicks,spend,cpm,cpc,ctr,actions,action_values
-      action_attribution_windows = ["7d_click","1d_view"]
-    Pagination: follow next.cursor（Make.com 模块勾上）
-    │
-    ▼
-[4] Iterator → over [3].data[]
-    │
-    ▼
-[5] Set variables → 抽取 actions/action_values 数组里的关键 action_type
-    omni_purchase_value =
-      {{ get(filter(5.action_values; "action_type"; "omni_purchase"); 1; "value") | default 0 }}
-    omni_purchases =
-      {{ get(filter(5.actions; "action_type"; "omni_purchase"); 1; "value") | default 0 }}
-    omni_add_to_cart =
-      {{ get(filter(5.actions; "action_type"; "omni_add_to_cart"); 1; "value") | default 0 }}
-    omni_initiated_checkout =
-      {{ get(filter(5.actions; "action_type"; "omni_initiated_checkout"); 1; "value") | default 0 }}
-    │
-    ▼
-[6] Array aggregator → 收集成 rows 数组
-    │
-    ▼
-[7] HTTP → POST /api/insights/meta/campaign-daily
+[1] Set vars (yesterday)
+[2] Data Store → cfg
+
+# === Campaign level ===
+[3] HTTP → Make a request
+       GET https://graph.facebook.com/v22.0/{{2.meta_account_id}}/insights?
+           level=campaign
+           &time_range={"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
+           &fields=campaign_id,campaign_name,objective,account_id,account_name,
+                  impressions,clicks,spend,cpm,cpc,ctr,actions,action_values
+           &limit=500
+           &access_token={{2.meta_token}}
+[4] Iterator → {{3.data}}
+[5] Set vars（per-campaign，从 actions 抽 omni_*）
+       omni_purchase = {{ifempty(get(filter(4.actions; "action_type"; "omni_purchase"); 1; "value"); 0)}}
+       omni_atc      = {{ifempty(get(filter(4.actions; "action_type"; "omni_add_to_cart"); 1; "value"); 0)}}
+       omni_ic       = {{ifempty(get(filter(4.actions; "action_type"; "omni_initiated_checkout"); 1; "value"); 0)}}
+       omni_pv       = {{ifempty(get(filter(4.action_values; "action_type"; "omni_purchase"); 1; "value"); 0)}}
+[6] Array Aggregator → 收集成 rows
+[7] HTTP POST → /api/insights/meta/campaign-daily
+
+# === Ad level ===
+[8] HTTP → Make a request
+       GET https://graph.facebook.com/v22.0/{{2.meta_account_id}}/insights?
+           level=ad
+           &time_range={"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
+           &fields=ad_id,ad_name,adset_id,adset_name,campaign_id,account_id,
+                  impressions,clicks,spend,cpm,cpc,ctr,actions,action_values
+           &limit=500
+           &access_token={{2.meta_token}}
+[9] HTTP → Make a request (拿 creative 缩略图)
+       这一步可省，先填 null。要的话循环每个 ad_id GET .../{ad_id}?fields=creative{thumbnail_url,object_story_spec}
+[10] Iterator + Set vars + Array Aggregator → 同上
+[11] HTTP POST → /api/insights/meta/ad-daily
 ```
 
-### HTTP body
-
+Body for campaign POST（[7]）：
 ```json
 {
   "tenant_id": "{{2.tenant_id}}",
-  "rows": [
-    {{6.array}}
-  ]
+  "rows": {{6.array}}
 }
 ```
-
-其中 `[6].array` 每个元素由 [5] 输出，结构：
-
+其中 [6.array] 每条结构（在 Array Aggregator record builder 里粘）：
 ```json
 {
   "date": "{{1.yesterday}}",
@@ -217,206 +167,280 @@ Make.com 表达式：
   "impressions": "{{4.impressions}}",
   "clicks_all": "{{4.clicks}}",
   "spend": "{{4.spend}}",
-  "purchases": {{5.omni_purchases}},
-  "purchase_conv_value": "{{5.omni_purchase_value}}",
-  "adds_to_cart": {{5.omni_add_to_cart}},
-  "initiated_checkouts": {{5.omni_initiated_checkout}},
+  "purchases": {{5.omni_purchase}},
+  "purchase_conv_value": "{{5.omni_pv}}",
+  "adds_to_cart": {{5.omni_atc}},
+  "initiated_checkouts": {{5.omni_ic}},
   "cpm": "{{4.cpm}}",
   "cpc_all": "{{4.cpc}}",
   "ctr_all": "{{ 4.ctr / 100 }}",
-  "roas": "{{ 5.omni_purchase_value / 4.spend }}"
+  "roas": "{{ 5.omni_pv / 4.spend }}"
 }
 ```
 
-### 字段映射要点
-
-- Meta 的 `ctr` 是百分比（例 `1.23` 表示 1.23%），我们的字段是小数（0.0123），需要除以 100。
-- `actions` 数组里的 `action_type` 用 **omni_*** 前缀的（覆盖 web + app + offline 全渠道），不要用纯 web 的 `purchase`/`add_to_cart`，否则跟 Looker 报表对不上。
-- 单 ad account 多个时，把 [3] 改成 iterator over data store 里的 ad account 列表。
-- `time_range` 想拉**回填**（例如最近 7 天）时把 since/until 调宽。我们的 upsert 用 `(tenantId, date, campaignId)` 做主键，重跑幂等。
+Ad POST 类似，用 ad_id/ad_name/adset_id/adset_name 替换字段。
 
 ---
 
-## Scenario 3 — Google Ads account daily
+## Scenario 3 — Meta breakdowns 循环
 
-**目标表**：`GoogleDailyMetric`
-**端点**：`POST /api/insights/google/daily`
+**目标表**：`MetaBreakdownDaily`（一个表装所有 breakdown 类型）
 **频率**：每日 02:00 UTC
 
-### 模块流
+不同 breakdown 用不同 query 参数，但**全部 POST 到同一个端点**，靠 `breakdown_type` 字段区分。
 
 ```
-[1] Set variables (yesterday)
-    │
-    ▼
-[2] Data store → Get config
-    │
-    ▼
-[3] Google Ads → Search Stream (GAQL)
-    Customer ID: {{2.google_customer_id}}
-    Query: ↓
-        SELECT
-          segments.date,
-          metrics.impressions,
-          metrics.clicks,
-          metrics.cost_micros,
-          metrics.conversions,
-          metrics.conversions_value,
-          metrics.average_cpc,
-          metrics.ctr
-        FROM customer
-        WHERE segments.date = '{{1.yesterday}}'
-    │
-    ▼
-[4] Aggregator → SUM 所有指标（同一天可能多个 sub-customer 行）
-    │
-    ▼
-[5] HTTP → POST /api/insights/google/daily
+[1] Set vars (yesterday)
+[2] Data Store → cfg
+[3] Iterator over 一个静态数组：
+       [
+         {bk: "country",            api: "country"},
+         {bk: "publisher_platform", api: "publisher_platform"},
+         {bk: "device_platform",    api: "device_platform"},
+         {bk: "age_gender",         api: "age,gender"},
+         {bk: "promoted_object",    api: "promoted_object"},
+         {bk: "landing_page",       api: "landing_url"}
+       ]
+[4] HTTP → Make a request (per iteration)
+       GET https://graph.facebook.com/v22.0/{{2.meta_account_id}}/insights?
+           level=account
+           &breakdowns={{3.api}}
+           &time_range={"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
+           &fields=impressions,clicks,spend,actions,action_values
+           &limit=500
+           &access_token={{2.meta_token}}
+[5] Iterator → {{4.data}}
+[6] Set vars (extract omni_purchase + dim1/dim2 based on breakdown type)
+       dim1 = (按 bk 取对应字段，如 5.country / 5.publisher_platform / 5.age / 5.landing_url)
+       dim2 = (age_gender 时取 5.gender，其他空字符串)
+[7] Array Aggregator → rows
+[8] HTTP POST → /api/insights/meta/breakdown
 ```
 
-### HTTP body
-
+Body：
 ```json
 {
   "tenant_id": "{{2.tenant_id}}",
-  "rows": [
-    {
-      "date": "{{1.yesterday}}",
-      "impressions": {{4.impressions}},
-      "clicks": {{4.clicks}},
-      "cost": "{{ 4.cost_micros / 1000000 }}",
-      "total_conv_value": "{{4.conversions_value}}",
-      "purchases": {{ floor(4.conversions) }},
-      "adds_to_cart": 0,
-      "begins_checkout": 0,
-      "avg_cpc": "{{ 4.average_cpc / 1000000 }}",
-      "ctr": "{{ 4.ctr }}"
-    }
-  ]
+  "rows": {{7.array}}
 }
 ```
-
-### 字段映射要点
-
-- **cost_micros**：Google Ads 用 micros (1 USD = 1,000,000)，必须除以 1,000,000 转成美元。`average_cpc` 同样是 micros。
-- **`conversions`** 是浮点（含小数权重），我们的 `purchases` 是整数。简单处理：`floor()`。如果想精确，加一个浮点中间字段。
-- **adds_to_cart / begins_checkout** 只有专门配置了 conversion action 的账号才有。Phase 1 先填 0，Phase 3 再补（用 conversion_action 维度查询）。
-- **ctr**：Google Ads 这里返回的是小数（0.0123 = 1.23%），不需要再转换，跟我们的字段同方向。
-
----
-
-## Scenario 4 — Google Ads by campaign type daily
-
-**目标表**：`GoogleCampaignTypeDaily`
-**端点**：`POST /api/insights/google/campaign-type`
-**频率**：每日 02:00 UTC
-
-### 模块流
-
-```
-[1] Set variables (yesterday)
-    │
-    ▼
-[2] Data store → Get config
-    │
-    ▼
-[3] Google Ads → Search Stream (GAQL)
-    Query: ↓
-        SELECT
-          segments.date,
-          campaign.advertising_channel_type,
-          metrics.clicks,
-          metrics.cost_micros,
-          metrics.conversions,
-          metrics.conversions_value
-        FROM campaign
-        WHERE segments.date = '{{1.yesterday}}'
-          AND campaign.status != 'REMOVED'
-    │
-    ▼
-[4] Aggregator → 按 advertising_channel_type 分组 SUM
-    │
-    ▼
-[5] Iterator over [4]
-    │
-    ▼
-[6] Array aggregator → 收集 rows
-    │
-    ▼
-[7] HTTP → POST /api/insights/google/campaign-type
-```
-
-### HTTP body
-
-```json
-{
-  "tenant_id": "{{2.tenant_id}}",
-  "rows": [
-    {{6.array}}
-  ]
-}
-```
-
-每个 row：
+每条 row：
 ```json
 {
   "date": "{{1.yesterday}}",
-  "campaign_type": "{{ 5.advertising_channel_type | mapType }}",
-  "clicks": {{5.clicks}},
-  "cost": "{{ 5.cost_micros / 1000000 }}",
-  "purchases": {{ floor(5.conversions) }},
-  "total_conv_value": "{{5.conversions_value}}",
-  "roas": "{{ 5.conversions_value / (5.cost_micros / 1000000) }}"
+  "breakdown_type": "{{3.bk}}",
+  "dim1": "{{6.dim1}}",
+  "dim2": "{{6.dim2}}",
+  "impressions": "{{5.impressions}}",
+  "clicks_all": "{{5.clicks}}",
+  "spend": "{{5.spend}}",
+  "purchases": {{6.omni_purchase}},
+  "purchase_conv_value": "{{6.omni_pv}}",
+  "roas": "{{ 6.omni_pv / 5.spend }}"
 }
 ```
 
-### `campaign_type` 值映射（Google Ads enum → 我们看板上显示的字符串）
-
-把 GAQL 返回的 enum 值映射到看板字符串（在 Set variables 模块里写 switch / lookup）：
-
-| Google Ads enum | 我们存的值 |
-|---|---|
-| `PERFORMANCE_MAX` | `Performance Max` |
-| `SEARCH` | `Search` |
-| `SHOPPING` | `Shopping` |
-| `VIDEO` | `Video` |
-| `DISCOVERY` / `DEMAND_GEN` | `Discovery` |
-| `DISPLAY` | `Display` |
-| `LOCAL_SERVICES` / `MULTI_CHANNEL` / 其它 | enum 原值 |
+**`promoted_object` 特殊处理**：Meta 返回的是嵌套对象（`{"pixel_id":"...","custom_event_type":"PURCHASE"}`），转 string 当作 dim1 即可——业务端会原样存。
 
 ---
 
-## 导入蓝图（可选，作为模块布局起点）
+## Scenario 4 — Google daily + campaign type
 
-`./blueprints/` 目录下 4 个 JSON 是**框架蓝图**，包含：
+**目标表**：`GoogleDailyMetric` + `GoogleCampaignTypeDaily`
+**频率**：每日 02:00 UTC
 
-- Set variables 模块（已配置 yesterday 计算）
-- Data store get 模块（占位，连接需要在 Make.com 里手工选）
-- HTTP POST 模块（URL、headers、body 模板已配好，只需替换 `{{...}}` 引用上游模块输出）
-- 中间的数据源模块（Shopify/Facebook/Google Ads）**留空**——这些模块的版本和必填参数取决于你 Make.com 账号里安装的具体 app 版本，按上面"模块流"章节手工添加最稳
+```
+[1] Set vars (yesterday)
+[2] Data Store → cfg
 
-导入步骤：
+# === 账号日聚合 ===
+[3] Google Ads → Search (GAQL)
+       Customer ID: {{2.google_customer_id}}
+       Login customer ID: {{2.google_login_customer_id}}（如果是 MCC）
+       Query:
+       SELECT segments.date,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.cost_micros,
+              metrics.conversions,
+              metrics.conversions_value,
+              metrics.average_cpc,
+              metrics.ctr
+       FROM customer
+       WHERE segments.date = '{{1.yesterday}}'
+[4] Numeric Aggregator → SUM 全部
+[5] HTTP POST → /api/insights/google/daily
 
-1. Make.com → My scenarios → "Create a new scenario" 旁边的 ⋯ → **Import blueprint**
-2. 选择 `01-shopify-daily.blueprint.json`（先一个一个来）
-3. 导入后会有红色警告：连接缺失。打开每个红色模块，选择对应连接（或先创建连接）
-4. 在中间手工添加 Shopify/Facebook/Google Ads 模块，按上面"模块流"配置
-5. 测试运行（**Run once**），检查最后 HTTP 模块返回 `{"ok":true,"data":{"upserted":N}}`
-6. 调整成功后 → Schedule → daily 02:00 UTC → Activate
-
-## 验证
-
-每次 scenario 跑完，到服务器查看新行：
-
-```bash
-ssh root@47.251.57.66 'docker exec makcom_ads_mysql sh -c "mysql -uroot -p\$MYSQL_ROOT_PASSWORD makcom_ads -e \"SELECT date, totalSales, orders, returns FROM ShopifyDailyMetric WHERE tenantId=\\\"<your_tenant_id>\\\" ORDER BY date DESC LIMIT 5;\""'
+# === 按 campaign type 分组 ===
+[6] Google Ads → Search (GAQL)
+       Query:
+       SELECT segments.date,
+              campaign.advertising_channel_type,
+              metrics.clicks,
+              metrics.cost_micros,
+              metrics.conversions,
+              metrics.conversions_value
+       FROM campaign
+       WHERE segments.date = '{{1.yesterday}}'
+         AND campaign.status != 'REMOVED'
+[7] Numeric Aggregator GROUP BY campaign.advertising_channel_type
+[8] Iterator + Set vars (enum → display name)
+       campaign_type =
+         switch(7.advertising_channel_type;
+                "PERFORMANCE_MAX"; "Performance Max";
+                "SEARCH"; "Search";
+                "SHOPPING"; "Shopping";
+                "VIDEO"; "Video";
+                "DEMAND_GEN"; "Discovery";
+                "DISCOVERY"; "Discovery";
+                "DISPLAY"; "Display";
+                7.advertising_channel_type)
+[9] Array Aggregator → rows
+[10] HTTP POST → /api/insights/google/campaign-type
 ```
 
-或者直接打开 [http://47.251.57.66:8090/reports](http://47.251.57.66:8090/reports) 看 KPI 卡有没有更新。
+Body for [5]：
+```json
+{
+  "tenant_id": "{{2.tenant_id}}",
+  "rows": [{
+    "date": "{{1.yesterday}}",
+    "impressions": {{4.impressions}},
+    "clicks": {{4.clicks}},
+    "cost": "{{ 4.cost_micros / 1000000 }}",
+    "total_conv_value": "{{4.conversions_value}}",
+    "purchases": {{floor(4.conversions)}},
+    "adds_to_cart": 0,
+    "begins_checkout": 0,
+    "avg_cpc": "{{ 4.average_cpc / 1000000 }}",
+    "ctr": "{{4.ctr}}"
+  }]
+}
+```
+
+Body for [10]：
+```json
+{
+  "tenant_id": "{{2.tenant_id}}",
+  "rows": {{9.array}}
+}
+```
+每条 row：
+```json
+{
+  "date": "{{1.yesterday}}",
+  "campaign_type": "{{8.campaign_type}}",
+  "clicks": {{7.clicks}},
+  "cost": "{{ 7.cost_micros / 1000000 }}",
+  "purchases": {{floor(7.conversions)}},
+  "total_conv_value": "{{7.conversions_value}}",
+  "roas": "{{ 7.conversions_value / (7.cost_micros / 1000000) }}"
+}
+```
+
+**关键转换**：
+- `cost_micros` ÷ 1,000,000 → 美元
+- `average_cpc` ÷ 1,000,000 → 美元
+- `ctr` 已经是小数，不需再除
+- `conversions` 是浮点 → `floor()` 取整
+
+---
+
+## Scenario 5 — Google breakdowns 循环
+
+**目标表**：`GoogleBreakdownDaily`
+**频率**：每日 02:00 UTC
+
+8 种 breakdown 共用一个 scenario，靠 GAQL 区分查询，全部 POST 到同一个端点。
+
+```
+[1] Set vars (yesterday)
+[2] Data Store → cfg
+[3] Iterator over 静态数组，每项 (bk, gaql)：
+
+  [
+    {bk: "search_term_search", gaql: "SELECT search_term_view.search_term, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value FROM search_term_view WHERE segments.date = '{{1.yesterday}}' AND segments.ad_network_type = 'SEARCH'"},
+    {bk: "search_term_shopping", gaql: "... AND segments.ad_network_type = 'SHOPPING'"},
+    {bk: "top_product_shopping", gaql: "SELECT segments.product_title, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value FROM shopping_performance_view WHERE segments.date = '{{1.yesterday}}'"},
+    {bk: "final_url", gaql: "SELECT campaign.advertising_channel_type, ad_group_ad.ad.final_urls, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value FROM ad_group_ad WHERE segments.date = '{{1.yesterday}}'"},
+    {bk: "country", gaql: "SELECT segments.geo_target_country, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value FROM geographic_view WHERE segments.date = '{{1.yesterday}}'"},
+    {bk: "conv_value_gender", gaql: "SELECT ad_group_criterion.gender.type, metrics.conversions_value FROM gender_view WHERE segments.date = '{{1.yesterday}}'"},
+    {bk: "conv_value_age", gaql: "SELECT ad_group_criterion.age_range.type, metrics.conversions_value FROM age_range_view WHERE segments.date = '{{1.yesterday}}'"},
+    {bk: "conv_value_device", gaql: "SELECT segments.device, metrics.conversions_value FROM customer WHERE segments.date = '{{1.yesterday}}'"}
+  ]
+
+[4] Google Ads → Search → query: {{3.gaql}}
+[5] Iterator over results
+[6] Set vars → dim1 (按 bk 取对应字段)
+[7] Array Aggregator
+[8] HTTP POST → /api/insights/google/breakdown
+```
+
+Body：
+```json
+{
+  "tenant_id": "{{2.tenant_id}}",
+  "rows": {{7.array}}
+}
+```
+每条 row：
+```json
+{
+  "date": "{{1.yesterday}}",
+  "breakdown_type": "{{3.bk}}",
+  "dim1": "{{6.dim1}}",
+  "dim2": "",
+  "clicks": {{5.metrics.clicks}},
+  "cost": "{{ 5.metrics.cost_micros / 1000000 }}",
+  "purchases": {{floor(5.metrics.conversions)}},
+  "total_conv_value": "{{5.metrics.conversions_value}}",
+  "all_conv_value": "{{5.metrics.conversions_value}}"
+}
+```
+
+`final_url` 特例：`dim1 = ad_group_ad.ad.final_urls[0]`，`dim2 = campaign.advertising_channel_type`。
+
+---
+
+## 排程与试运行
+
+每个 scenario 配好后：
+
+1. 测试：把日期改成最近有数据的某一天，**Run once**，看返回是不是 `{"ok": true, "data": {"upserted": N}}`，N 大于 0
+2. 看后端日志确认数据落表：
+   ```bash
+   ssh root@47.251.57.66 'docker exec makcom_ads_mysql sh -c "mysql -uroot -p\\$MYSQL_ROOT_PASSWORD makcom_ads -e \"SELECT COUNT(*) FROM MetaCampaignDaily WHERE tenantId='\''cmogsd46v0001mw016lgb3dzz'\''; SELECT MAX(date) FROM MetaCampaignDaily;\""'
+   ```
+3. 通过后 → **Scheduling**: Every day at 02:00 UTC（北京时间 10:00）→ **ON**
 
 ## 回填历史数据
 
-如果你想拉过去 30 天而不是只拉昨天：
+把 `Set vars` 里的 `yesterday` 改成静态数组循环 `[2026-04-01, 2026-04-02, ...]`，加一层 Iterator，每次跑一天。**所有写入端点都按 `(tenantId, date, ...)` upsert，幂等**，可以放心重跑。
 
-- **临时回填**：在第一个 Set variables 里放一个静态日期范围，把 `time_range` / `WHERE segments.date BETWEEN ...` 改宽。`MetaCampaignDaily` 等都是按 `(tenantId, date, ...)` 主键 upsert，重跑幂等。
-- **批量按天循环**：用 Make.com 的 iterator 模块生成 `[yesterday-30 ... yesterday-1]` 的日期数组，对每个日期跑一次 GAQL/Insights 调用 + POST。注意 Meta/Google 都有日 quota，一次别拉太多。
+## 端点字段参考
+
+完整 zod schema 在代码里：[src/lib/insights/schemas.ts](../src/lib/insights/schemas.ts)。snake_case 字段名，写错了会 400 + 详细错误。
+
+## 验证 — 看板有数据
+
+数据进 DB 后立即去 [http://47.251.57.66:8090/reports](http://47.251.57.66:8090/reports) 看：
+- Overview 上有 Shopify 销售卡 + 总折线
+- Meta 标签页有 KPI + 时间序列 + Campaigns 表 + 5 个 breakdown 表/饼
+- Google 标签页有 KPI + 时间序列 + Campaign types + 5 个 breakdown 表/饼
+- 每页头部"数据最新更新"显示对应 source 的 fetchedAt
+
+如果某块空着，说明对应 scenario 没跑或没拉到数据。看 Make.com History 的 execution log + 后端 `docker compose logs --tail=50 app` 可以定位到哪一步。
+
+---
+
+## 端点对照表（备查）
+
+| 端点 | 数据表 | 用途 |
+|---|---|---|
+| `/api/insights/shopify/daily` | ShopifyDailyMetric | Shopify 日订单聚合 |
+| `/api/insights/meta/campaign-daily` | MetaCampaignDaily | Meta 各 campaign 日数据 |
+| `/api/insights/meta/ad-daily` | MetaAdDaily | Meta 各 ad 日数据 + creative 信息 |
+| `/api/insights/meta/breakdown` | MetaBreakdownDaily | Meta 6 种维度 breakdown |
+| `/api/insights/google/daily` | GoogleDailyMetric | Google 账号日聚合 |
+| `/api/insights/google/campaign-type` | GoogleCampaignTypeDaily | Google 按 channel type |
+| `/api/insights/google/breakdown` | GoogleBreakdownDaily | Google 8 种维度 breakdown |
