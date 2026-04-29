@@ -21,13 +21,11 @@ ssh root@47.251.57.66 'grep MAKE_SHARED_SECRET /opt/makcom_ads/.env.production'
 # tenant_id 已知：cmogsd46v0001mw016lgb3dzz （biao 工作区）
 ```
 
-### B. Meta：拿一个 System User Token（永不过期）
+### B. Make.com Facebook Insights connection（OAuth）
 
-1. [business.facebook.com](https://business.facebook.com) → Business Settings → Users → System Users → Add
-2. 给它 Admin 权限，名称如 `makcom-bot`
-3. 选中后点 **Generate New Token** → 选你的 App → 勾 `ads_read`、`business_management` → 生成
-4. 把 token 复制下来（**永久有效**）
-5. 在 Business Settings → 把要管的广告账号加进 System User 的资源（Ad Accounts → Assign）
+Make.com 内置 **Facebook Insights** 应用已经处理 OAuth + 字段选择 + breakdown，比手写 HTTP 简单很多。如果你 Make.com → **Connections** 里已经有一条 Facebook 连接（带 `ads_read` scope，授权时勾过"读取广告"权限），直接复用即可。
+
+如果还没有：在 scenario 里随便加一个 **Facebook Insights → Get Insights** 模块，第一次配置时它会弹 Facebook 授权对话框，登录并授权所需权限即可。
 
 ### C. Make.com Data Store（共享配置）
 
@@ -38,11 +36,12 @@ ssh root@47.251.57.66 'grep MAKE_SHARED_SECRET /opt/makcom_ads/.env.production'
 | tenant_id | `cmogsd46v0001mw016lgb3dzz` |
 | make_secret | 上面 A 拿到的 MAKE_SHARED_SECRET |
 | api_base | `http://47.251.57.66:8090` |
-| meta_token | 上面 B 拿到的 System User Token |
-| meta_account_id | `act_xxxxxxxxxxxxxxxx`（你的 Meta 广告账号）|
+| meta_account_id | `act_xxxxxxxxxxxxxxxx`（你的 Meta 广告账号；用于 Google Ads 不相关）|
 | google_customer_id | `1234567890`（去横线）|
 | google_login_customer_id | （可选，MCC ID）|
 | shopify_shop | `tenniix.myshopify.com` |
+
+> 注：用 Facebook Insights 模块时不再需要 `meta_token`——OAuth 全部由 Make.com 维护。
 
 每个 scenario 第一步都是 `Data Store → Get a Record (key=cfg)`，后续模块直接用 `{{2.tenant_id}}` 等引用。
 
@@ -109,76 +108,100 @@ Body：
 **目标表**：`MetaCampaignDaily` + `MetaAdDaily`
 **频率**：每日 02:00 UTC
 
-Meta Insights API 一次只能查一个 level，所以这个 scenario 跑两次 API 调用。
+> 关键：用 Make.com 内置的 **Facebook Insights → Get Insights** 模块，它会自动处理 OAuth、字段、迭代输出。`actions[]` 和 `action_values[]` **直接原样转发**给我们后端，我们这边解析 `omni_purchase` 等。Make.com 不需要做 filter/extract。
+
+### Campaign-level
 
 ```
-[1] Set vars (yesterday)
-[2] Data Store → cfg
-
-# === Campaign level ===
-[3] HTTP → Make a request
-       GET https://graph.facebook.com/v22.0/{{2.meta_account_id}}/insights?
-           level=campaign
-           &time_range={"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
-           &fields=campaign_id,campaign_name,objective,account_id,account_name,
-                  impressions,clicks,spend,cpm,cpc,ctr,actions,action_values
-           &limit=500
-           &access_token={{2.meta_token}}
-[4] Iterator → {{3.data}}
-[5] Set vars（per-campaign，从 actions 抽 omni_*）
-       omni_purchase = {{ifempty(get(filter(4.actions; "action_type"; "omni_purchase"); 1; "value"); 0)}}
-       omni_atc      = {{ifempty(get(filter(4.actions; "action_type"; "omni_add_to_cart"); 1; "value"); 0)}}
-       omni_ic       = {{ifempty(get(filter(4.actions; "action_type"; "omni_initiated_checkout"); 1; "value"); 0)}}
-       omni_pv       = {{ifempty(get(filter(4.action_values; "action_type"; "omni_purchase"); 1; "value"); 0)}}
-[6] Array Aggregator → 收集成 rows
-[7] HTTP POST → /api/insights/meta/campaign-daily
-
-# === Ad level ===
-[8] HTTP → Make a request
-       GET https://graph.facebook.com/v22.0/{{2.meta_account_id}}/insights?
-           level=ad
-           &time_range={"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
-           &fields=ad_id,ad_name,adset_id,adset_name,campaign_id,account_id,
-                  impressions,clicks,spend,cpm,cpc,ctr,actions,action_values
-           &limit=500
-           &access_token={{2.meta_token}}
-[9] HTTP → Make a request (拿 creative 缩略图)
-       这一步可省，先填 null。要的话循环每个 ad_id GET .../{ad_id}?fields=creative{thumbnail_url,object_story_spec}
-[10] Iterator + Set vars + Array Aggregator → 同上
-[11] HTTP POST → /api/insights/meta/ad-daily
+[1] Set vars
+       yesterday = {{formatDate(addDays(now; -1); "YYYY-MM-DD")}}
+[2] Data Store → Get a record (key=cfg)
+[3] Facebook Insights → Get Insights
+       Connection: 你的 Facebook Insights 连接
+       Get Insights for: Campaign
+       Specify Date by: Time Range
+         Time Range: { since: {{1.yesterday}}, until: {{1.yesterday}} }
+       Time Increment: 1
+       Fields (勾这些):
+         account_id, account_name, campaign_id, campaign_name, objective,
+         impressions, clicks, spend, cpm, cpc, ctr, actions, action_values
+       Breakdowns: (空)
+[4] Array aggregator
+       Source: [3]
+       Target structure: Custom
+         （字段直接照抄 [3] 的输出，见下面的 body 模板）
+[5] HTTP → Make a request
+       URL: {{2.api_base}}/api/insights/meta/campaign-daily
+       Method: POST
+       Headers: X-Make-Secret = {{2.make_secret}}, Content-Type = application/json
+       Body type: Raw / application/json
+       Request content:
+       {
+         "tenant_id": "{{2.tenant_id}}",
+         "rows": {{4.array}}
+       }
 ```
 
-Body for campaign POST（[7]）：
+Array aggregator 里每条 row 的字段映射（**直接 1:1 转发**，业务端做转化）：
+
 ```json
 {
-  "tenant_id": "{{2.tenant_id}}",
-  "rows": {{6.array}}
-}
-```
-其中 [6.array] 每条结构（在 Array Aggregator record builder 里粘）：
-```json
-{
-  "date": "{{1.yesterday}}",
-  "account_id": "{{4.account_id}}",
-  "account_name": "{{4.account_name}}",
-  "campaign_id": "{{4.campaign_id}}",
-  "campaign_name": "{{4.campaign_name}}",
-  "campaign_objective": "{{4.objective}}",
-  "impressions": "{{4.impressions}}",
-  "clicks_all": "{{4.clicks}}",
-  "spend": "{{4.spend}}",
-  "purchases": {{5.omni_purchase}},
-  "purchase_conv_value": "{{5.omni_pv}}",
-  "adds_to_cart": {{5.omni_atc}},
-  "initiated_checkouts": {{5.omni_ic}},
-  "cpm": "{{4.cpm}}",
-  "cpc_all": "{{4.cpc}}",
-  "ctr_all": "{{ 4.ctr / 100 }}",
-  "roas": "{{ 5.omni_pv / 4.spend }}"
+  "date_start": "{{3.date_start}}",
+  "account_id": "{{3.account_id}}",
+  "account_name": "{{3.account_name}}",
+  "campaign_id": "{{3.campaign_id}}",
+  "campaign_name": "{{3.campaign_name}}",
+  "objective": "{{3.objective}}",
+  "impressions": "{{3.impressions}}",
+  "clicks": "{{3.clicks}}",
+  "spend": "{{3.spend}}",
+  "cpm": "{{3.cpm}}",
+  "cpc": "{{3.cpc}}",
+  "ctr": "{{3.ctr}}",
+  "actions": {{3.actions}},
+  "action_values": {{3.action_values}}
 }
 ```
 
-Ad POST 类似，用 ad_id/ad_name/adset_id/adset_name 替换字段。
+业务端会自动：
+- 从 `actions[]` 提取 `omni_purchase`、`omni_add_to_cart`、`omni_initiated_checkout`
+- 从 `action_values[]` 提取 `omni_purchase` 的 value 作为 `purchase_conv_value`
+- 把 `ctr`（Meta 返回 1.23 = 1.23%）规范化成小数
+- 计算 `roas = purchase_conv_value / spend`
+- 接受 `date_start` 当作 `date`
+
+所以你 Make.com 这边**完全不需要 filter / 计算 / 类型转换**。
+
+### Ad-level
+
+类似上面，把 [3] 的 "Get Insights for" 改成 **Ad**，Fields 改成：
+```
+ad_id, ad_name, adset_id, adset_name, campaign_id, account_id,
+impressions, clicks, spend, cpm, cpc, ctr, actions, action_values
+```
+
+POST 端点改成 `/api/insights/meta/ad-daily`，Array aggregator 里多带几个字段：
+```json
+{
+  "date_start": "{{3.date_start}}",
+  "account_id": "{{3.account_id}}",
+  "campaign_id": "{{3.campaign_id}}",
+  "adset_id": "{{3.adset_id}}",
+  "adset_name": "{{3.adset_name}}",
+  "ad_id": "{{3.ad_id}}",
+  "ad_name": "{{3.ad_name}}",
+  "impressions": "{{3.impressions}}",
+  "clicks": "{{3.clicks}}",
+  "spend": "{{3.spend}}",
+  "cpm": "{{3.cpm}}",
+  "cpc": "{{3.cpc}}",
+  "ctr": "{{3.ctr}}",
+  "actions": {{3.actions}},
+  "action_values": {{3.action_values}}
+}
+```
+
+要 Creatives 表显示缩略图和文案（`ad_creative_image_url` + `ad_body`）的话，得再加一步：循环每个 `ad_id` 调 Facebook Pages → "Make an API Call" 拿 `creative{thumbnail_url, object_story_spec.video_data.message}`，拼到 row 里。先跳过这步，Creatives 表就只有名字 + 数字，等其他流程跑通后再加。
 
 ---
 
@@ -187,60 +210,54 @@ Ad POST 类似，用 ad_id/ad_name/adset_id/adset_name 替换字段。
 **目标表**：`MetaBreakdownDaily`（一个表装所有 breakdown 类型）
 **频率**：每日 02:00 UTC
 
-不同 breakdown 用不同 query 参数，但**全部 POST 到同一个端点**，靠 `breakdown_type` 字段区分。
+6 种 breakdown 共用一个 scenario：在 scenario 顶部一次性 iterate 一个 breakdown 列表，每次跑一种。
 
 ```
 [1] Set vars (yesterday)
 [2] Data Store → cfg
-[3] Iterator over 一个静态数组：
+[3] Iterator over 静态数组（6 种 breakdown）：
        [
-         {bk: "country",            api: "country"},
-         {bk: "publisher_platform", api: "publisher_platform"},
-         {bk: "device_platform",    api: "device_platform"},
-         {bk: "age_gender",         api: "age,gender"},
-         {bk: "promoted_object",    api: "promoted_object"},
-         {bk: "landing_page",       api: "landing_url"}
+         {bk: "country",            api: "country",            dim1_field: "country"},
+         {bk: "publisher_platform", api: "publisher_platform", dim1_field: "publisher_platform"},
+         {bk: "device_platform",    api: "device_platform",    dim1_field: "device_platform"},
+         {bk: "age_gender",         api: "age,gender",         dim1_field: "age", dim2_field: "gender"},
+         {bk: "promoted_object",    api: "promoted_object",    dim1_field: "promoted_object"},
+         {bk: "landing_page",       api: "landing_url",        dim1_field: "landing_url"}
        ]
-[4] HTTP → Make a request (per iteration)
-       GET https://graph.facebook.com/v22.0/{{2.meta_account_id}}/insights?
-           level=account
-           &breakdowns={{3.api}}
-           &time_range={"since":"{{1.yesterday}}","until":"{{1.yesterday}}"}
-           &fields=impressions,clicks,spend,actions,action_values
-           &limit=500
-           &access_token={{2.meta_token}}
-[5] Iterator → {{4.data}}
-[6] Set vars (extract omni_purchase + dim1/dim2 based on breakdown type)
-       dim1 = (按 bk 取对应字段，如 5.country / 5.publisher_platform / 5.age / 5.landing_url)
-       dim2 = (age_gender 时取 5.gender，其他空字符串)
-[7] Array Aggregator → rows
-[8] HTTP POST → /api/insights/meta/breakdown
+[4] Facebook Insights → Get Insights
+       Connection: 你的 Facebook Insights 连接
+       Get Insights for: Account
+       Time Range: { since: {{1.yesterday}}, until: {{1.yesterday}} }
+       Time Increment: 1
+       Fields: impressions, clicks, spend, actions, action_values
+       Breakdowns: {{3.api}}    ← 动态，每次循环不同
+[5] Set vars (per-row 提取 dim1/dim2)
+       dim1 = {{ get(4; 3.dim1_field) }}    ← 例如 4.country / 4.publisher_platform 等
+       dim2 = {{ ifempty(get(4; 3.dim2_field); "") }}    ← 仅 age_gender 时有 dim2
+[6] Array aggregator → rows
+[7] HTTP POST → /api/insights/meta/breakdown
 ```
 
-Body：
-```json
-{
-  "tenant_id": "{{2.tenant_id}}",
-  "rows": {{7.array}}
-}
-```
 每条 row：
 ```json
 {
-  "date": "{{1.yesterday}}",
+  "date_start": "{{4.date_start}}",
   "breakdown_type": "{{3.bk}}",
-  "dim1": "{{6.dim1}}",
-  "dim2": "{{6.dim2}}",
-  "impressions": "{{5.impressions}}",
-  "clicks_all": "{{5.clicks}}",
-  "spend": "{{5.spend}}",
-  "purchases": {{6.omni_purchase}},
-  "purchase_conv_value": "{{6.omni_pv}}",
-  "roas": "{{ 6.omni_pv / 5.spend }}"
+  "dim1": "{{5.dim1}}",
+  "dim2": "{{5.dim2}}",
+  "impressions": "{{4.impressions}}",
+  "clicks": "{{4.clicks}}",
+  "spend": "{{4.spend}}",
+  "actions": {{4.actions}},
+  "action_values": {{4.action_values}}
 }
 ```
 
-**`promoted_object` 特殊处理**：Meta 返回的是嵌套对象（`{"pixel_id":"...","custom_event_type":"PURCHASE"}`），转 string 当作 dim1 即可——业务端会原样存。
+业务端同样自动从 `actions[]`/`action_values[]` 提取 `purchases` 和 `purchase_conv_value`。
+
+**`promoted_object` 注意事项**：Meta 返回是嵌套对象（如 `{"pixel_id":"123","custom_event_type":"PURCHASE"}`），Make.com 会渲染成 JSON 字符串。`dim1` 字段就用这个字符串，业务端原样存到表里。要更精细的话可以把 `dim1` 设为 `custom_event_type`、`dim_meta` 字段塞完整对象。
+
+**`landing_page` 注意事项**：`landing_url` 这个 breakdown Meta 不一定在所有账号都返回值；如果发现这个表为空，看 Make.com History 里 [4] 的 raw output，确认 Meta API 是否真的支持这个 breakdown 在你账号上的使用。
 
 ---
 

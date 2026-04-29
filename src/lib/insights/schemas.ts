@@ -14,6 +14,25 @@ const RowEnvelope = <T extends z.ZodTypeAny>(row: T) =>
     rows: z.array(row).min(1).max(2000),
   });
 
+// Meta API actions[] / action_values[] item shape
+const ActionItem = z.object({
+  action_type: z.string(),
+  value: z.union([z.string(), z.number()]).transform((v) => Number(v)),
+});
+type ActionItemT = z.infer<typeof ActionItem>;
+
+function findActionValue(arr: ActionItemT[] | undefined, type: string): number | undefined {
+  return arr?.find((a) => a.action_type === type)?.value;
+}
+
+// Meta returns CTR as a percentage (1.23 = 1.23%); we store as decimal (0.0123).
+function normalizeCtr(v: string | null | undefined): string | null {
+  if (v == null) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return n > 1 ? String(n / 100) : String(n);
+}
+
 // ---- Shopify ----
 export const ShopifyDailyRow = z.object({
   date: isoDate,
@@ -25,48 +44,136 @@ export const ShopifyDailyRow = z.object({
 export const ShopifyDailyEnvelope = RowEnvelope(ShopifyDailyRow);
 
 // ---- Meta campaign daily ----
-export const MetaCampaignDailyRow = z.object({
-  date: isoDate,
-  account_id: z.string().min(1),
-  account_name: z.string().optional().nullable(),
-  campaign_id: z.string().min(1),
-  campaign_name: z.string().min(1),
-  campaign_objective: z.string().optional().nullable(),
-  impressions: bigintLike.optional().default(BigInt(0)),
-  clicks_all: bigintLike.optional().default(BigInt(0)),
-  spend: decimalLike.optional().default("0"),
-  purchases: intLike.optional().default(0),
-  purchase_conv_value: decimalLike.optional().default("0"),
-  adds_to_cart: intLike.optional().default(0),
-  initiated_checkouts: intLike.optional().default(0),
-  cpm: decimalLike.optional().nullable(),
-  cpc_all: decimalLike.optional().nullable(),
-  ctr_all: decimalLike.optional().nullable(),
-  roas: decimalLike.optional().nullable(),
-});
+// Accepts BOTH our internal snake_case shape AND Make.com Facebook Insights module
+// native output (actions[], action_values[], clicks, cpc, ctr, objective, date_start).
+export const MetaCampaignDailyRow = z
+  .object({
+    date: isoDate.optional(),
+    date_start: isoDate.optional(),
+    account_id: z.string().min(1),
+    account_name: z.string().optional().nullable(),
+    campaign_id: z.string().min(1),
+    campaign_name: z.string().min(1),
+    campaign_objective: z.string().optional().nullable(),
+    objective: z.string().optional().nullable(),
+    impressions: bigintLike.optional(),
+    clicks: bigintLike.optional(),
+    clicks_all: bigintLike.optional(),
+    spend: decimalLike.optional(),
+    purchases: intLike.optional(),
+    purchase_conv_value: decimalLike.optional(),
+    adds_to_cart: intLike.optional(),
+    initiated_checkouts: intLike.optional(),
+    actions: z.array(ActionItem).optional(),
+    action_values: z.array(ActionItem).optional(),
+    cpm: decimalLike.optional().nullable(),
+    cpc: decimalLike.optional().nullable(),
+    cpc_all: decimalLike.optional().nullable(),
+    ctr: decimalLike.optional().nullable(),
+    ctr_all: decimalLike.optional().nullable(),
+    roas: decimalLike.optional().nullable(),
+  })
+  .transform((r) => {
+    const date = r.date ?? r.date_start;
+    if (!date) throw new Error("date or date_start required");
+    const purchases = r.purchases ?? findActionValue(r.actions, "omni_purchase") ?? 0;
+    const purchaseConvValue =
+      r.purchase_conv_value ?? String(findActionValue(r.action_values, "omni_purchase") ?? 0);
+    const addsToCart = r.adds_to_cart ?? findActionValue(r.actions, "omni_add_to_cart") ?? 0;
+    const initiatedCheckouts =
+      r.initiated_checkouts ?? findActionValue(r.actions, "omni_initiated_checkout") ?? 0;
+    const spend = r.spend ?? "0";
+    const roas =
+      r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
+    return {
+      date,
+      account_id: r.account_id,
+      account_name: r.account_name ?? null,
+      campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name,
+      campaign_objective: r.campaign_objective ?? r.objective ?? null,
+      impressions: r.impressions ?? BigInt(0),
+      clicks_all: r.clicks_all ?? r.clicks ?? BigInt(0),
+      spend,
+      purchases,
+      purchase_conv_value: purchaseConvValue,
+      adds_to_cart: addsToCart,
+      initiated_checkouts: initiatedCheckouts,
+      cpm: r.cpm ?? null,
+      cpc_all: r.cpc_all ?? r.cpc ?? null,
+      ctr_all: normalizeCtr(r.ctr_all ?? r.ctr ?? null),
+      roas,
+    };
+  });
 export const MetaCampaignDailyEnvelope = RowEnvelope(MetaCampaignDailyRow);
 
 // ---- Meta ad daily ----
-export const MetaAdDailyRow = z.object({
-  date: isoDate,
-  account_id: z.string().min(1),
-  campaign_id: z.string().min(1),
-  adset_id: z.string().min(1),
-  adset_name: z.string().optional().nullable(),
-  ad_id: z.string().min(1),
-  ad_name: z.string().min(1),
-  ad_creative_image_url: z.string().optional().nullable(),
-  ad_body: z.string().optional().nullable(),
-  impressions: bigintLike.optional().default(BigInt(0)),
-  clicks_all: bigintLike.optional().default(BigInt(0)),
-  spend: decimalLike.optional().default("0"),
-  website_purchases: intLike.optional().default(0),
-  purchase_conv_value: decimalLike.optional().default("0"),
-  cpm: decimalLike.optional().nullable(),
-  cpc_all: decimalLike.optional().nullable(),
-  ctr_all: decimalLike.optional().nullable(),
-  roas: decimalLike.optional().nullable(),
-});
+export const MetaAdDailyRow = z
+  .object({
+    date: isoDate.optional(),
+    date_start: isoDate.optional(),
+    account_id: z.string().min(1),
+    campaign_id: z.string().min(1),
+    adset_id: z.string().min(1),
+    adset_name: z.string().optional().nullable(),
+    ad_id: z.string().min(1),
+    ad_name: z.string().min(1),
+    ad_creative_image_url: z.string().optional().nullable(),
+    ad_body: z.string().optional().nullable(),
+    impressions: bigintLike.optional(),
+    clicks: bigintLike.optional(),
+    clicks_all: bigintLike.optional(),
+    spend: decimalLike.optional(),
+    website_purchases: intLike.optional(),
+    purchase_conv_value: decimalLike.optional(),
+    actions: z.array(ActionItem).optional(),
+    action_values: z.array(ActionItem).optional(),
+    cpm: decimalLike.optional().nullable(),
+    cpc: decimalLike.optional().nullable(),
+    cpc_all: decimalLike.optional().nullable(),
+    ctr: decimalLike.optional().nullable(),
+    ctr_all: decimalLike.optional().nullable(),
+    roas: decimalLike.optional().nullable(),
+  })
+  .transform((r) => {
+    const date = r.date ?? r.date_start;
+    if (!date) throw new Error("date or date_start required");
+    const websitePurchases =
+      r.website_purchases ??
+      findActionValue(r.actions, "omni_purchase") ??
+      findActionValue(r.actions, "purchase") ??
+      0;
+    const purchaseConvValue =
+      r.purchase_conv_value ??
+      String(
+        findActionValue(r.action_values, "omni_purchase") ??
+          findActionValue(r.action_values, "purchase") ??
+          0,
+      );
+    const spend = r.spend ?? "0";
+    const roas =
+      r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
+    return {
+      date,
+      account_id: r.account_id,
+      campaign_id: r.campaign_id,
+      adset_id: r.adset_id,
+      adset_name: r.adset_name ?? null,
+      ad_id: r.ad_id,
+      ad_name: r.ad_name,
+      ad_creative_image_url: r.ad_creative_image_url ?? null,
+      ad_body: r.ad_body ?? null,
+      impressions: r.impressions ?? BigInt(0),
+      clicks_all: r.clicks_all ?? r.clicks ?? BigInt(0),
+      spend,
+      website_purchases: websitePurchases,
+      purchase_conv_value: purchaseConvValue,
+      cpm: r.cpm ?? null,
+      cpc_all: r.cpc_all ?? r.cpc ?? null,
+      ctr_all: normalizeCtr(r.ctr_all ?? r.ctr ?? null),
+      roas,
+    };
+  });
 export const MetaAdDailyEnvelope = RowEnvelope(MetaAdDailyRow);
 
 // ---- Meta breakdown daily ----
@@ -79,19 +186,47 @@ export const META_BREAKDOWN_TYPES = [
   "device_platform",
 ] as const;
 
-export const MetaBreakdownDailyRow = z.object({
-  date: isoDate,
-  breakdown_type: z.enum(META_BREAKDOWN_TYPES),
-  dim1: z.string().min(1).max(255),
-  dim2: z.string().max(128).optional().default(""),
-  dim_meta: z.unknown().optional().nullable(),
-  impressions: bigintLike.optional().default(BigInt(0)),
-  clicks_all: bigintLike.optional().default(BigInt(0)),
-  spend: decimalLike.optional().default("0"),
-  purchases: intLike.optional().default(0),
-  purchase_conv_value: decimalLike.optional().default("0"),
-  roas: decimalLike.optional().nullable(),
-});
+export const MetaBreakdownDailyRow = z
+  .object({
+    date: isoDate.optional(),
+    date_start: isoDate.optional(),
+    breakdown_type: z.enum(META_BREAKDOWN_TYPES),
+    dim1: z.string().min(1).max(255),
+    dim2: z.string().max(128).optional().default(""),
+    dim_meta: z.unknown().optional().nullable(),
+    impressions: bigintLike.optional(),
+    clicks: bigintLike.optional(),
+    clicks_all: bigintLike.optional(),
+    spend: decimalLike.optional(),
+    purchases: intLike.optional(),
+    purchase_conv_value: decimalLike.optional(),
+    actions: z.array(ActionItem).optional(),
+    action_values: z.array(ActionItem).optional(),
+    roas: decimalLike.optional().nullable(),
+  })
+  .transform((r) => {
+    const date = r.date ?? r.date_start;
+    if (!date) throw new Error("date or date_start required");
+    const purchases = r.purchases ?? findActionValue(r.actions, "omni_purchase") ?? 0;
+    const purchaseConvValue =
+      r.purchase_conv_value ?? String(findActionValue(r.action_values, "omni_purchase") ?? 0);
+    const spend = r.spend ?? "0";
+    const roas =
+      r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
+    return {
+      date,
+      breakdown_type: r.breakdown_type,
+      dim1: r.dim1,
+      dim2: r.dim2,
+      dim_meta: r.dim_meta,
+      impressions: r.impressions ?? BigInt(0),
+      clicks_all: r.clicks_all ?? r.clicks ?? BigInt(0),
+      spend,
+      purchases,
+      purchase_conv_value: purchaseConvValue,
+      roas,
+    };
+  });
 export const MetaBreakdownDailyEnvelope = RowEnvelope(MetaBreakdownDailyRow);
 
 // ---- Google daily ----
