@@ -33,7 +33,7 @@ function normalizeCtr(v: string | null | undefined): string | null {
   return n > 1 ? String(n / 100) : String(n);
 }
 
-// ---- Shopify ----
+// ---- Shopify (pre-aggregated rows) ----
 export const ShopifyDailyRow = z.object({
   date: isoDate,
   total_sales: decimalLike,
@@ -42,6 +42,24 @@ export const ShopifyDailyRow = z.object({
   currency: z.string().min(1).max(8).optional().default("USD"),
 });
 export const ShopifyDailyEnvelope = RowEnvelope(ShopifyDailyRow);
+
+// ---- Shopify (raw orders passthrough — backend aggregates by createdAt date) ----
+// Accepts the GraphQL response shape from Shopify Search Orders module in Make.com.
+// We extract just the fields we need; ignore the rest.
+const ShopifyOrderRaw = z.object({
+  id: z.string().optional(),
+  createdAt: z.string().min(1),
+  totalPriceSet: z.object({
+    amount: z.union([z.string(), z.number()]).transform((v) => Number(v)),
+    currencyCode: z.string().optional(),
+  }),
+});
+export type ShopifyOrderRawT = z.infer<typeof ShopifyOrderRaw>;
+
+export const ShopifyOrdersEnvelope = z.object({
+  tenant_id: z.string().min(1),
+  orders: z.array(ShopifyOrderRaw).max(5000),
+});
 
 // ---- Meta campaign daily ----
 // Accepts BOTH our internal snake_case shape AND Make.com Facebook Insights module
