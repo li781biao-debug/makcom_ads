@@ -248,30 +248,95 @@ export const MetaBreakdownDailyRow = z
 export const MetaBreakdownDailyEnvelope = RowEnvelope(MetaBreakdownDailyRow);
 
 // ---- Google daily ----
-export const GoogleDailyRow = z.object({
-  date: isoDate,
-  impressions: bigintLike.optional().default(BigInt(0)),
-  clicks: bigintLike.optional().default(BigInt(0)),
-  cost: decimalLike.optional().default("0"),
-  total_conv_value: decimalLike.optional().default("0"),
-  purchases: intLike.optional().default(0),
-  adds_to_cart: intLike.optional().default(0),
-  begins_checkout: intLike.optional().default(0),
-  avg_cpc: decimalLike.optional().nullable(),
-  ctr: decimalLike.optional().nullable(),
-});
+// Accepts BOTH our canonical fields AND Google Ads API native fields
+// (cost_micros, average_cpc_micros, conversions, conversions_value).
+// Backend converts micros → dollars and floors conversions to int.
+const numLike = z.union([z.number(), z.string()]);
+
+export const GoogleDailyRow = z
+  .object({
+    date: isoDate,
+    impressions: bigintLike.nullish(),
+    clicks: bigintLike.nullish(),
+    cost: decimalLike.nullish(),
+    cost_micros: numLike.nullish(),
+    total_conv_value: decimalLike.nullish(),
+    conversions_value: numLike.nullish(),
+    purchases: intLike.nullish(),
+    conversions: numLike.nullish(),
+    adds_to_cart: intLike.nullish(),
+    begins_checkout: intLike.nullish(),
+    avg_cpc: decimalLike.nullish(),
+    average_cpc: numLike.nullish(),
+    average_cpc_micros: numLike.nullish(),
+    ctr: decimalLike.nullish(),
+  })
+  .transform((r) => {
+    const cost =
+      r.cost ??
+      (r.cost_micros != null ? String(Number(r.cost_micros) / 1_000_000) : "0");
+    const totalConvValue =
+      r.total_conv_value ?? (r.conversions_value != null ? String(r.conversions_value) : "0");
+    const purchases =
+      r.purchases ?? (r.conversions != null ? Math.floor(Number(r.conversions)) : 0);
+    const avgCpcRaw = r.avg_cpc ?? r.average_cpc ?? r.average_cpc_micros;
+    // average_cpc / average_cpc_micros are micros; avg_cpc is dollars. Heuristic:
+    // a value > 100 is almost certainly micros (since CPC in dollars is rarely > 100).
+    const avgCpc =
+      avgCpcRaw == null
+        ? null
+        : Number(avgCpcRaw) > 100
+          ? String(Number(avgCpcRaw) / 1_000_000)
+          : String(avgCpcRaw);
+    return {
+      date: r.date,
+      impressions: r.impressions ?? BigInt(0),
+      clicks: r.clicks ?? BigInt(0),
+      cost,
+      total_conv_value: totalConvValue,
+      purchases,
+      adds_to_cart: r.adds_to_cart ?? 0,
+      begins_checkout: r.begins_checkout ?? 0,
+      avg_cpc: avgCpc,
+      ctr: r.ctr ?? null,
+    };
+  });
 export const GoogleDailyEnvelope = RowEnvelope(GoogleDailyRow);
 
 // ---- Google campaign type daily ----
-export const GoogleCampaignTypeRow = z.object({
-  date: isoDate,
-  campaign_type: z.string().min(1),
-  clicks: bigintLike.optional().default(BigInt(0)),
-  cost: decimalLike.optional().default("0"),
-  purchases: intLike.optional().default(0),
-  total_conv_value: decimalLike.optional().default("0"),
-  roas: decimalLike.optional().nullable(),
-});
+export const GoogleCampaignTypeRow = z
+  .object({
+    date: isoDate,
+    campaign_type: z.string().min(1),
+    clicks: bigintLike.nullish(),
+    cost: decimalLike.nullish(),
+    cost_micros: numLike.nullish(),
+    purchases: intLike.nullish(),
+    conversions: numLike.nullish(),
+    total_conv_value: decimalLike.nullish(),
+    conversions_value: numLike.nullish(),
+    roas: decimalLike.optional().nullable(),
+  })
+  .transform((r) => {
+    const cost =
+      r.cost ??
+      (r.cost_micros != null ? String(Number(r.cost_micros) / 1_000_000) : "0");
+    const totalConvValue =
+      r.total_conv_value ?? (r.conversions_value != null ? String(r.conversions_value) : "0");
+    const purchases =
+      r.purchases ?? (r.conversions != null ? Math.floor(Number(r.conversions)) : 0);
+    const roas =
+      r.roas ?? (Number(cost) > 0 ? String(Number(totalConvValue) / Number(cost)) : null);
+    return {
+      date: r.date,
+      campaign_type: r.campaign_type,
+      clicks: r.clicks ?? BigInt(0),
+      cost,
+      purchases,
+      total_conv_value: totalConvValue,
+      roas,
+    };
+  });
 export const GoogleCampaignTypeEnvelope = RowEnvelope(GoogleCampaignTypeRow);
 
 // ---- Google breakdown daily ----
@@ -286,16 +351,41 @@ export const GOOGLE_BREAKDOWN_TYPES = [
   "conv_value_device",
 ] as const;
 
-export const GoogleBreakdownDailyRow = z.object({
-  date: isoDate,
-  breakdown_type: z.enum(GOOGLE_BREAKDOWN_TYPES),
-  dim1: z.string().min(1).max(255),
-  dim2: z.string().max(128).optional().default(""),
-  dim_meta: z.unknown().optional().nullable(),
-  clicks: bigintLike.optional().default(BigInt(0)),
-  cost: decimalLike.optional().default("0"),
-  purchases: intLike.optional().default(0),
-  total_conv_value: decimalLike.optional().default("0"),
-  all_conv_value: decimalLike.optional().nullable(),
-});
+export const GoogleBreakdownDailyRow = z
+  .object({
+    date: isoDate,
+    breakdown_type: z.enum(GOOGLE_BREAKDOWN_TYPES),
+    dim1: z.string().min(1).max(255),
+    dim2: z.string().max(128).optional().default(""),
+    dim_meta: z.unknown().optional().nullable(),
+    clicks: bigintLike.nullish(),
+    cost: decimalLike.nullish(),
+    cost_micros: numLike.nullish(),
+    purchases: intLike.nullish(),
+    conversions: numLike.nullish(),
+    total_conv_value: decimalLike.nullish(),
+    conversions_value: numLike.nullish(),
+    all_conv_value: decimalLike.nullish(),
+  })
+  .transform((r) => {
+    const cost =
+      r.cost ??
+      (r.cost_micros != null ? String(Number(r.cost_micros) / 1_000_000) : "0");
+    const totalConvValue =
+      r.total_conv_value ?? (r.conversions_value != null ? String(r.conversions_value) : "0");
+    const purchases =
+      r.purchases ?? (r.conversions != null ? Math.floor(Number(r.conversions)) : 0);
+    return {
+      date: r.date,
+      breakdown_type: r.breakdown_type,
+      dim1: r.dim1,
+      dim2: r.dim2,
+      dim_meta: r.dim_meta,
+      clicks: r.clicks ?? BigInt(0),
+      cost,
+      purchases,
+      total_conv_value: totalConvValue,
+      all_conv_value: r.all_conv_value ?? null,
+    };
+  });
 export const GoogleBreakdownDailyEnvelope = RowEnvelope(GoogleBreakdownDailyRow);
