@@ -369,6 +369,35 @@ export const GoogleCampaignTypeRow = z
   });
 export const GoogleCampaignTypeEnvelope = RowEnvelope(GoogleCampaignTypeRow);
 
+// Google Ads geo target criterion IDs → ISO 3166-1 alpha-2 codes for the
+// countries we care about. Source: Google Ads geotargets table.
+const GOOGLE_GEO_CRITERION_TO_ISO: Record<string, string> = {
+  "2004": "AF", "2008": "AL", "2012": "DZ", "2020": "AD", "2024": "AO", "2032": "AR",
+  "2036": "AU", "2040": "AT", "2048": "BH", "2050": "BD", "2056": "BE", "2060": "BM",
+  "2068": "BO", "2070": "BA", "2076": "BR", "2100": "BG", "2104": "MM", "2108": "BI",
+  "2112": "BY", "2116": "KH", "2120": "CM", "2124": "CA", "2152": "CL", "2156": "CN",
+  "2158": "TW", "2170": "CO", "2178": "CG", "2188": "CR", "2191": "HR", "2196": "CY",
+  "2203": "CZ", "2208": "DK", "2214": "DO", "2218": "EC", "2222": "SV", "2231": "ET",
+  "2233": "EE", "2242": "FJ", "2246": "FI", "2250": "FR", "2268": "GE", "2276": "DE",
+  "2288": "GH", "2300": "GR", "2320": "GT", "2340": "HN", "2344": "HK", "2348": "HU",
+  "2352": "IS", "2356": "IN", "2360": "ID", "2364": "IR", "2368": "IQ", "2372": "IE",
+  "2376": "IL", "2380": "IT", "2384": "CI", "2388": "JM", "2392": "JP", "2398": "KZ",
+  "2400": "JO", "2404": "KE", "2410": "KR", "2414": "KW", "2417": "KG", "2418": "LA",
+  "2422": "LB", "2428": "LV", "2430": "LR", "2434": "LY", "2440": "LT", "2442": "LU",
+  "2446": "MO", "2450": "MG", "2454": "MW", "2458": "MY", "2462": "MV", "2466": "ML",
+  "2470": "MT", "2484": "MX", "2496": "MN", "2498": "MD", "2499": "ME", "2504": "MA",
+  "2508": "MZ", "2516": "NA", "2524": "NP", "2528": "NL", "2554": "NZ", "2558": "NI",
+  "2566": "NG", "2578": "NO", "2586": "PK", "2591": "PA", "2598": "PG", "2600": "PY",
+  "2604": "PE", "2608": "PH", "2616": "PL", "2620": "PT", "2624": "GW", "2630": "PR",
+  "2634": "QA", "2642": "RO", "2643": "RU", "2646": "RW", "2682": "SA", "2686": "SN",
+  "2688": "RS", "2702": "SG", "2703": "SK", "2704": "VN", "2705": "SI", "2710": "ZA",
+  "2716": "ZW", "2724": "ES", "2728": "SS", "2729": "SD", "2752": "SE", "2756": "CH",
+  "2760": "SY", "2762": "TJ", "2764": "TH", "2768": "TG", "2776": "TO", "2780": "TT",
+  "2784": "AE", "2788": "TN", "2792": "TR", "2795": "TM", "2800": "UG", "2804": "UA",
+  "2807": "MK", "2818": "EG", "2826": "GB", "2834": "TZ", "2840": "US", "2854": "BF",
+  "2858": "UY", "2860": "UZ", "2862": "VE", "2887": "YE", "2894": "ZM",
+};
+
 // ---- Google breakdown daily ----
 export const GOOGLE_BREAKDOWN_TYPES = [
   "search_term_search",
@@ -403,6 +432,7 @@ export const GoogleBreakdownDailyRow = z
     searchTermView: looseRecord.nullish(),
     adGroupAd: looseRecord.nullish(),
     adGroupCriterion: looseRecord.nullish(),
+    geographicView: looseRecord.nullish(),
   })
   .transform((r) => {
     const m = (r.metrics ?? {}) as Record<string, unknown>;
@@ -411,16 +441,33 @@ export const GoogleBreakdownDailyRow = z
     const stv = (r.searchTermView ?? {}) as Record<string, unknown>;
     const aga = (r.adGroupAd ?? {}) as Record<string, unknown>;
     const agc = (r.adGroupCriterion ?? {}) as Record<string, unknown>;
+    const gv = (r.geographicView ?? {}) as Record<string, unknown>;
 
     // Resolve dim1 — explicit beats auto-extract
     let dim1 = r.dim1;
     let dim2 = r.dim2 || "";
     if (!dim1 || dim1.length === 0) {
       switch (r.breakdown_type) {
-        case "country":
-          dim1 =
-            (seg.geoTargetCountry as string) ?? (seg.geo_target_country as string) ?? "";
+        case "country": {
+          // Prefer ISO country code from segments.geoTargetCountry; fall back to
+          // mapping geographic_view.country_criterion_id → ISO code.
+          const isoFromSeg =
+            (seg.geoTargetCountry as string) ?? (seg.geo_target_country as string);
+          if (isoFromSeg) {
+            dim1 = isoFromSeg;
+          } else {
+            const cid =
+              (gv.countryCriterionId as string | number | undefined) ??
+              (gv.country_criterion_id as string | number | undefined);
+            if (cid != null) {
+              const iso = GOOGLE_GEO_CRITERION_TO_ISO[String(cid)];
+              dim1 = iso ?? `geo:${cid}`;
+            } else {
+              dim1 = "";
+            }
+          }
           break;
+        }
         case "search_term_search":
         case "search_term_shopping":
           dim1 = (stv.searchTerm as string) ?? (stv.search_term as string) ?? "";
