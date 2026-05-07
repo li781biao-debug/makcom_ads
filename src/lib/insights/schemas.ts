@@ -11,7 +11,7 @@ const isoDate = z
 const RowEnvelope = <T extends z.ZodTypeAny>(row: T) =>
   z.object({
     tenant_id: z.string().min(1),
-    rows: z.array(row).min(1).max(2000),
+    rows: z.array(row).min(1).max(10000),
   });
 
 // Meta API actions[] / action_values[] item shape
