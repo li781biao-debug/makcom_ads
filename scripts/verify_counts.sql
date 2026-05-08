@@ -1,0 +1,9 @@
+SELECT 'ShopifyDailyMetric' AS tbl, COUNT(*) AS n FROM makcom_ads.ShopifyDailyMetric        WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'MetaCampaignDaily',       COUNT(*) FROM makcom_ads.MetaCampaignDaily       WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'MetaAdDaily',             COUNT(*) FROM makcom_ads.MetaAdDaily             WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'MetaBreakdownDaily',      COUNT(*) FROM makcom_ads.MetaBreakdownDaily      WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'GoogleDailyMetric',       COUNT(*) FROM makcom_ads.GoogleDailyMetric       WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'GoogleCampaignTypeDaily', COUNT(*) FROM makcom_ads.GoogleCampaignTypeDaily WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'GoogleBreakdownDaily',    COUNT(*) FROM makcom_ads.GoogleBreakdownDaily    WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'MetaConnection',          COUNT(*) FROM makcom_ads.MetaConnection          WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz'
+UNION ALL SELECT 'AdAccount',               COUNT(*) FROM makcom_ads.AdAccount               WHERE tenantId = 'cmogsd46v0001mw016lgb3dzz';

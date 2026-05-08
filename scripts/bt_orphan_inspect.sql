@@ -1,0 +1,4 @@
+SELECT TABLE_SCHEMA AS db, TABLE_NAME AS tbl, TABLE_ROWS AS rows
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA IN ('makcom_ads', 'ads_tenniix')
+ORDER BY TABLE_SCHEMA, TABLE_NAME;

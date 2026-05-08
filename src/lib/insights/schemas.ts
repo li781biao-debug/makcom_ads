@@ -289,6 +289,12 @@ function pickMetric(
 export const GoogleDailyRow = z
   .object({
     date: isoDate,
+    // When set (e.g. "PURCHASE", "ADD_TO_CART", "BEGIN_CHECKOUT"), this row
+    // is one slice of the day — the route groups by date and pivots conversions
+    // into purchases / adds_to_cart / begins_checkout. May arrive flat or
+    // nested under `segments.conversionActionCategory`.
+    conversion_action_category: z.string().nullish(),
+    segments: looseRecord.nullish(),
     impressions: bigintLike.nullish(),
     clicks: bigintLike.nullish(),
     cost: decimalLike.nullish(),
@@ -307,6 +313,12 @@ export const GoogleDailyRow = z
   })
   .transform((r) => {
     const m = (r.metrics ?? {}) as Record<string, unknown>;
+    const seg = (r.segments ?? {}) as Record<string, unknown>;
+    const category =
+      r.conversion_action_category ??
+      (seg.conversionActionCategory as string | undefined) ??
+      (seg.conversion_action_category as string | undefined) ??
+      null;
     const impressionsN = pickMetric(r.impressions as never, m, "impressions");
     const clicksN = pickMetric(r.clicks as never, m, "clicks");
     // Prefer micros — Google Ads API only ever returns cost_micros; if Make.com
@@ -317,9 +329,7 @@ export const GoogleDailyRow = z
       ? String(costMicrosN / 1_000_000)
       : (r.cost != null ? String(r.cost) : "0");
     const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
-    const totalConvValue = r.total_conv_value ?? (convValueN != null ? String(convValueN) : "0");
     const conversionsN = pickMetric(r.conversions, m, "conversions");
-    const purchases = r.purchases ?? (conversionsN != null ? Math.floor(conversionsN) : 0);
     const cpcRawN = pickMetric(
       r.avg_cpc ?? r.average_cpc ?? r.average_cpc_micros,
       m,
@@ -331,15 +341,22 @@ export const GoogleDailyRow = z
     const ctrN = pickMetric(r.ctr, m, "ctr");
     return {
       date: r.date,
+      conversion_action_category: category ? category.toUpperCase() : null,
+      // Traffic metrics — Google duplicates these across category-segmented rows,
+      // so the route takes any one row's value.
       impressions: BigInt(Math.trunc(impressionsN ?? 0)),
       clicks: BigInt(Math.trunc(clicksN ?? 0)),
       cost,
-      total_conv_value: totalConvValue,
-      purchases,
-      adds_to_cart: r.adds_to_cart ?? 0,
-      begins_checkout: r.begins_checkout ?? 0,
       avg_cpc: avgCpc,
       ctr: ctrN != null ? String(ctrN) : null,
+      // Per-row conversion fields the route uses for category pivoting.
+      conversions: conversionsN ?? null,
+      conversions_value: convValueN != null ? String(convValueN) : null,
+      // Legacy direct fields — used when no row in the day has a category.
+      total_conv_value: r.total_conv_value ?? null,
+      purchases: r.purchases ?? null,
+      adds_to_cart: r.adds_to_cart ?? null,
+      begins_checkout: r.begins_checkout ?? null,
     };
   });
 export const GoogleDailyEnvelope = RowEnvelope(GoogleDailyRow);
