@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { projectClient } from "@/lib/db/projectClient";
 import {
   resolveRange,
   previousRange,
@@ -10,6 +11,7 @@ import {
   topMetaCreatives,
   metaBreakdownTop,
   lastFetchedAt,
+  type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct, fmtNumber } from "@/components/insights/Kpi";
 import { LineChart } from "@/components/insights/LineChart";
@@ -21,14 +23,25 @@ import { Freshness } from "@/components/insights/Freshness";
 export default async function MetaReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
-  const tenant = await getPrimaryTenant(userId);
-  if (!tenant) return <div>请先创建工作区</div>;
-
   const params = await searchParams;
+  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
+  if (!project) {
+    return (
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500">
+        当前账号没有任何项目权限，请联系管理员分配。
+      </div>
+    );
+  }
+
+  const ctx: ProjectQueryContext = {
+    client: projectClient(project.dbName),
+    tenantId: project.id,
+  };
+
   const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
 
@@ -46,18 +59,18 @@ export default async function MetaReportPage({
     byDevice,
     fresh,
   ] = await Promise.all([
-    metaAggregate(tenant.id, range),
-    metaAggregate(tenant.id, prev),
-    metaDailySeries(tenant.id, range),
-    topMetaCampaigns(tenant.id, range, 30),
-    topMetaCreatives(tenant.id, range, 20),
-    metaBreakdownTop(tenant.id, range, "country", 15),
-    metaBreakdownTop(tenant.id, range, "publisher_platform", 10),
-    metaBreakdownTop(tenant.id, range, "promoted_object", 10),
-    metaBreakdownTop(tenant.id, range, "landing_page", 10),
-    metaBreakdownTop(tenant.id, range, "age_gender", 50),
-    metaBreakdownTop(tenant.id, range, "device_platform", 10),
-    lastFetchedAt(tenant.id),
+    metaAggregate(ctx, range),
+    metaAggregate(ctx, prev),
+    metaDailySeries(ctx, range),
+    topMetaCampaigns(ctx, range, 30),
+    topMetaCreatives(ctx, range, 20),
+    metaBreakdownTop(ctx, range, "country", 15),
+    metaBreakdownTop(ctx, range, "publisher_platform", 10),
+    metaBreakdownTop(ctx, range, "promoted_object", 10),
+    metaBreakdownTop(ctx, range, "landing_page", 10),
+    metaBreakdownTop(ctx, range, "age_gender", 50),
+    metaBreakdownTop(ctx, range, "device_platform", 10),
+    lastFetchedAt(ctx),
   ]);
 
   type Camp = (typeof campaigns)[number];
@@ -154,7 +167,7 @@ export default async function MetaReportPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} from={from} to={to} basePath="/reports/meta" />
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports/meta" projectSlug={project.slug} />
         <Freshness meta={fresh.meta} />
       </div>
 
@@ -242,4 +255,3 @@ function mapToSlices(m: Map<string, number>) {
   const colors = autoColors(entries.length);
   return entries.map(([label, value], i) => ({ label, value, color: colors[i] }));
 }
-

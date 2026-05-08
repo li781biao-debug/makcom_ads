@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { verifyMakeSecret } from "@/lib/insights/auth";
+import { resolveProject } from "@/lib/insights/projectResolve";
 import { MetaAdDailyEnvelope } from "@/lib/insights/schemas";
 
 export async function POST(req: Request) {
@@ -15,15 +15,17 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { tenant_id, rows } = parsed.data;
+  const ctx = await resolveProject(parsed.data);
+  if (ctx instanceof NextResponse) return ctx;
+  const { rows } = parsed.data;
 
   let upserted = 0;
-  await prisma.$transaction(async (tx) => {
+  await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
       await tx.metaAdDaily.upsert({
         where: {
           tenantId_date_adId: {
-            tenantId: tenant_id,
+            tenantId: ctx.tenantId,
             date: r.date,
             adId: r.ad_id,
           },
@@ -48,7 +50,7 @@ export async function POST(req: Request) {
           fetchedAt: new Date(),
         },
         create: {
-          tenantId: tenant_id,
+          tenantId: ctx.tenantId,
           date: r.date,
           accountId: r.account_id,
           campaignId: r.campaign_id,

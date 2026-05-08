@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { Prisma } from "@/generated/prisma/client";
-import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma-project/client";
 import { verifyMakeSecret } from "@/lib/insights/auth";
+import { resolveProject } from "@/lib/insights/projectResolve";
 import { MetaBreakdownDailyEnvelope } from "@/lib/insights/schemas";
 
 export async function POST(req: Request) {
@@ -16,17 +16,19 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { tenant_id, rows } = parsed.data;
+  const ctx = await resolveProject(parsed.data);
+  if (ctx instanceof NextResponse) return ctx;
+  const { rows } = parsed.data;
 
   let upserted = 0;
-  await prisma.$transaction(async (tx) => {
+  await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
       const dimMeta =
         r.dim_meta == null ? Prisma.DbNull : (r.dim_meta as Prisma.InputJsonValue);
       await tx.metaBreakdownDaily.upsert({
         where: {
           tenantId_date_breakdownType_dim1_dim2: {
-            tenantId: tenant_id,
+            tenantId: ctx.tenantId,
             date: r.date,
             breakdownType: r.breakdown_type,
             dim1: r.dim1,
@@ -44,7 +46,7 @@ export async function POST(req: Request) {
           fetchedAt: new Date(),
         },
         create: {
-          tenantId: tenant_id,
+          tenantId: ctx.tenantId,
           date: r.date,
           breakdownType: r.breakdown_type,
           dim1: r.dim1,

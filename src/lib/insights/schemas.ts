@@ -9,10 +9,15 @@ const isoDate = z
   .transform((s) => new Date(s.slice(0, 10) + "T00:00:00Z"));
 
 const RowEnvelope = <T extends z.ZodTypeAny>(row: T) =>
-  z.object({
-    tenant_id: z.string().min(1),
-    rows: z.array(row).min(1).max(10000),
-  });
+  z
+    .object({
+      tenant_id: z.string().optional(),
+      project_slug: z.string().optional(),
+      rows: z.array(row).min(1).max(10000),
+    })
+    .refine((d) => !!(d.tenant_id || d.project_slug), {
+      message: "tenant_id or project_slug required",
+    });
 
 // Meta API actions[] / action_values[] item shape
 const ActionItem = z.object({
@@ -61,10 +66,15 @@ const ShopifyOrderRaw = z.object({
 });
 export type ShopifyOrderRawT = z.infer<typeof ShopifyOrderRaw>;
 
-export const ShopifyOrdersEnvelope = z.object({
-  tenant_id: z.string().min(1),
-  orders: z.array(ShopifyOrderRaw).max(5000),
-});
+export const ShopifyOrdersEnvelope = z
+  .object({
+    tenant_id: z.string().optional(),
+    project_slug: z.string().optional(),
+    orders: z.array(ShopifyOrderRaw).max(5000),
+  })
+  .refine((d) => !!(d.tenant_id || d.project_slug), {
+    message: "tenant_id or project_slug required",
+  });
 
 // ---- Meta campaign daily ----
 // Accepts BOTH our internal snake_case shape AND Make.com Facebook Insights module

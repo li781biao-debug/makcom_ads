@@ -1,0 +1,297 @@
+// Per-project Prisma schema — each project (tenniix, foo, bar...) has its own DB
+// using this schema. Rows still carry tenantId for defense-in-depth, even though
+// each DB belongs to exactly one project today.
+//
+// Migrations: run with --schema=prisma/project-schema/schema.prisma against each
+// project database (DATABASE_URL pointed at the target DB).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../../src/generated/prisma-project"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("PROJECT_DATABASE_URL")
+}
+
+// ===== Meta domain objects (synced from Meta API via Make.com) =====
+
+model MetaConnection {
+  id                String   @id @default(cuid())
+  tenantId          String
+  makeConnectionRef String
+  fbUserId          String?
+  fbUserName        String?
+  status            String   @default("active")
+  connectedAt       DateTime @default(now())
+  lastUsedAt        DateTime?
+
+  adAccounts AdAccount[]
+
+  @@index([tenantId])
+}
+
+model AdAccount {
+  id               String   @id @default(cuid())
+  tenantId         String
+  metaConnectionId String
+  actId            String
+  name             String
+  currency         String?
+  timezoneName     String?
+  status           Int?
+  syncedAt         DateTime @default(now())
+
+  metaConnection MetaConnection @relation(fields: [metaConnectionId], references: [id], onDelete: Cascade)
+  campaigns      Campaign[]
+  insights       InsightCache[]
+
+  @@unique([tenantId, actId])
+  @@index([metaConnectionId])
+}
+
+model Campaign {
+  id              String   @id @default(cuid())
+  tenantId        String
+  adAccountId     String
+  metaCampaignId  String
+  name            String
+  objective       String?
+  status          String?
+  dailyBudget     Int?
+  lifetimeBudget  Int?
+  syncedAt        DateTime @default(now())
+
+  adAccount AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  adSets    AdSet[]
+
+  @@unique([adAccountId, metaCampaignId])
+  @@index([tenantId])
+}
+
+model AdSet {
+  id             String   @id @default(cuid())
+  campaignId     String
+  metaAdSetId    String
+  name           String
+  status         String?
+  dailyBudget    Int?
+  billingEvent   String?
+  optimizationGoal String?
+  syncedAt       DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@unique([campaignId, metaAdSetId])
+}
+
+model Ad {
+  id          String   @id @default(cuid())
+  adSetId     String
+  metaAdId    String
+  name        String
+  status      String?
+  creativeId  String?
+  syncedAt    DateTime @default(now())
+
+  adSet    AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  creative Creative? @relation(fields: [creativeId], references: [id])
+
+  @@unique([adSetId, metaAdId])
+}
+
+model Creative {
+  id              String   @id @default(cuid())
+  tenantId        String
+  metaCreativeId  String
+  name            String
+  objectStorySpec Json?
+  thumbnailUrl    String?
+  syncedAt        DateTime @default(now())
+
+  ads Ad[]
+
+  @@unique([tenantId, metaCreativeId])
+}
+
+enum AssetType {
+  IMAGE
+  VIDEO
+}
+
+model Asset {
+  id              String    @id @default(cuid())
+  tenantId        String
+  type            AssetType
+  metaRef         String
+  filename        String?
+  previewUrl      String?
+  sizeBytes       Int?
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId, type])
+}
+
+// ===== Insights cache =====
+
+model InsightCache {
+  id          String   @id @default(cuid())
+  adAccountId String
+  level       String
+  dateRange   String
+  breakdowns  String?
+  data        Json
+  fetchedAt   DateTime @default(now())
+
+  adAccount AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([adAccountId, level, dateRange, breakdowns])
+  @@index([fetchedAt])
+}
+
+// ===== BI fact tables =====
+
+model ShopifyDailyMetric {
+  id          String   @id @default(cuid())
+  tenantId    String
+  date        DateTime @db.Date
+  totalSales  Decimal  @db.Decimal(18, 2)
+  orders      Int      @default(0)
+  returns     Int      @default(0)
+  currency    String   @default("USD")
+  fetchedAt   DateTime @default(now())
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+}
+
+model MetaCampaignDaily {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  date               DateTime @db.Date
+  accountId          String
+  accountName        String?
+  campaignId         String
+  campaignName       String
+  campaignObjective  String?
+  impressions        BigInt   @default(0)
+  clicksAll          BigInt   @default(0)
+  spend              Decimal  @db.Decimal(18, 4) @default(0)
+  purchases          Int      @default(0)
+  purchaseConvValue  Decimal  @db.Decimal(18, 2) @default(0)
+  addsToCart         Int      @default(0)
+  initiatedCheckouts Int      @default(0)
+  cpm                Decimal? @db.Decimal(10, 4)
+  cpcAll             Decimal? @db.Decimal(10, 4)
+  ctrAll             Decimal? @db.Decimal(10, 6)
+  roas               Decimal? @db.Decimal(10, 4)
+  fetchedAt          DateTime @default(now())
+
+  @@unique([tenantId, date, campaignId])
+  @@index([tenantId, date])
+  @@index([tenantId, campaignId])
+}
+
+model MetaAdDaily {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  date               DateTime @db.Date
+  accountId          String
+  campaignId         String
+  adsetId            String
+  adsetName          String?
+  adId               String
+  adName             String
+  adCreativeImageUrl String?  @db.Text
+  adBody             String?  @db.Text
+  impressions        BigInt   @default(0)
+  clicksAll          BigInt   @default(0)
+  spend              Decimal  @db.Decimal(18, 4) @default(0)
+  websitePurchases   Int      @default(0)
+  purchaseConvValue  Decimal  @db.Decimal(18, 2) @default(0)
+  cpm                Decimal? @db.Decimal(10, 4)
+  cpcAll             Decimal? @db.Decimal(10, 4)
+  ctrAll             Decimal? @db.Decimal(10, 6)
+  roas               Decimal? @db.Decimal(10, 4)
+  fetchedAt          DateTime @default(now())
+
+  @@unique([tenantId, date, adId])
+  @@index([tenantId, date])
+  @@index([tenantId, adId])
+}
+
+model MetaBreakdownDaily {
+  id                String   @id @default(cuid())
+  tenantId          String
+  date              DateTime @db.Date
+  breakdownType     String
+  dim1              String   @db.VarChar(255)
+  dim2              String   @default("") @db.VarChar(128)
+  dimMeta           Json?
+  impressions       BigInt   @default(0)
+  clicksAll         BigInt   @default(0)
+  spend             Decimal  @db.Decimal(18, 4) @default(0)
+  purchases         Int      @default(0)
+  purchaseConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  roas              Decimal? @db.Decimal(10, 4)
+  fetchedAt         DateTime @default(now())
+
+  @@unique([tenantId, date, breakdownType, dim1, dim2])
+  @@index([tenantId, breakdownType, date])
+}
+
+model GoogleDailyMetric {
+  id             String   @id @default(cuid())
+  tenantId       String
+  date           DateTime @db.Date
+  impressions    BigInt   @default(0)
+  clicks         BigInt   @default(0)
+  cost           Decimal  @db.Decimal(18, 4) @default(0)
+  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  purchases      Int      @default(0)
+  addsToCart     Int      @default(0)
+  beginsCheckout Int      @default(0)
+  avgCpc         Decimal? @db.Decimal(10, 4)
+  ctr            Decimal? @db.Decimal(10, 6)
+  fetchedAt      DateTime @default(now())
+
+  @@unique([tenantId, date])
+  @@index([tenantId, date])
+}
+
+model GoogleCampaignTypeDaily {
+  id             String   @id @default(cuid())
+  tenantId       String
+  date           DateTime @db.Date
+  campaignType   String
+  clicks         BigInt   @default(0)
+  cost           Decimal  @db.Decimal(18, 4) @default(0)
+  purchases      Int      @default(0)
+  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  roas           Decimal? @db.Decimal(10, 4)
+  fetchedAt      DateTime @default(now())
+
+  @@unique([tenantId, date, campaignType])
+  @@index([tenantId, date])
+}
+
+model GoogleBreakdownDaily {
+  id             String   @id @default(cuid())
+  tenantId       String
+  date           DateTime @db.Date
+  breakdownType  String
+  dim1           String   @db.VarChar(255)
+  dim2           String   @default("") @db.VarChar(128)
+  dimMeta        Json?
+  clicks         BigInt   @default(0)
+  cost           Decimal  @db.Decimal(18, 4) @default(0)
+  purchases      Int      @default(0)
+  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
+  allConvValue   Decimal? @db.Decimal(18, 2)
+  fetchedAt      DateTime @default(now())
+
+  @@unique([tenantId, date, breakdownType, dim1, dim2])
+  @@index([tenantId, breakdownType, date])
+}

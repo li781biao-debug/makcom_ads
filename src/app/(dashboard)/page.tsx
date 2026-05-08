@@ -1,18 +1,31 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { projectClient } from "@/lib/db/projectClient";
 
-export default async function OverviewPage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ project?: string }>;
+}) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
-  const tenant = await getPrimaryTenant(userId);
-  if (!tenant) return <div>请先创建工作区</div>;
+  const params = (await searchParams) ?? {};
+  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
+  if (!project) {
+    return (
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500">
+        当前账号没有任何项目权限，请联系管理员分配。
+      </div>
+    );
+  }
 
+  const client = projectClient(project.dbName);
   const [connCount, acctCount, campaignCount, jobCount] = await Promise.all([
-    prisma.metaConnection.count({ where: { tenantId: tenant.id } }),
-    prisma.adAccount.count({ where: { tenantId: tenant.id } }),
-    prisma.campaign.count({ where: { tenantId: tenant.id } }),
-    prisma.makeJob.count({ where: { tenantId: tenant.id } }),
+    client.metaConnection.count({ where: { tenantId: project.id } }),
+    client.adAccount.count({ where: { tenantId: project.id } }),
+    client.campaign.count({ where: { tenantId: project.id } }),
+    prisma.makeJob.count({ where: { tenantId: project.id } }),
   ]);
 
   const stats = [

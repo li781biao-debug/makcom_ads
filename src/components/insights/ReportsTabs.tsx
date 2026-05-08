@@ -15,7 +15,16 @@ export function ReportsTabs() {
   const from = params.get("from");
   const to = params.get("to");
   const days = params.get("days");
-  const qs = from && to ? `?from=${from}&to=${to}` : days ? `?days=${days}` : "";
+  const project = params.get("project");
+
+  const parts: string[] = [];
+  if (from && to) {
+    parts.push(`from=${from}`, `to=${to}`);
+  } else if (days) {
+    parts.push(`days=${days}`);
+  }
+  if (project) parts.push(`project=${encodeURIComponent(project)}`);
+  const qs = parts.length ? `?${parts.join("&")}` : "";
 
   return (
     <nav className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800 -mt-2">

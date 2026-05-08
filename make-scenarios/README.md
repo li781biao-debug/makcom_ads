@@ -2,6 +2,8 @@
 
 把 3 个平台（Shopify / Meta / Google）的数据接入看板，最少 **5 个 scenario** 跑完。设计原则：**Make.com 只做"取数 → 转发"，所有数据处理和转化放在业务端**（我们的 API 端点）。
 
+> ⚠️ **共性陷阱**：HTTP 模块的 body 模板里，凡是 `{{X.array}}` 这种引用 Array Aggregator 输出的地方，**外面必须手动加方括号** `[{{X.array}}]`。Make.com 不会自动包 `[ ]`，没包就不是合法 JSON 会报 `InvalidConfigurationError`。
+
 ```
 Shopify  ─[1] daily orders ──────▶ /api/insights/shopify/daily ─▶ ShopifyDailyMetric
 Meta     ─[2] campaign+ad daily ─▶ /api/insights/meta/{campaign,ad}-daily ─▶ MetaCampaignDaily / MetaAdDaily

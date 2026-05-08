@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { auth, signOut } from "@/auth";
 import { redirect } from "next/navigation";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
 
 const NAV = [
   { href: "/", label: "概览" },
@@ -18,14 +18,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const session = await auth();
   if (!session?.user) redirect("/login");
   const userId = (session.user as { id?: string }).id;
-  const tenant = userId ? await getPrimaryTenant(userId) : null;
+  const { project } = userId ? await resolveCurrentProject({ userId }) : { project: null };
 
   return (
     <div className="flex min-h-screen">
       <aside className="w-60 shrink-0 border-r border-zinc-200 dark:border-zinc-800 p-4 flex flex-col gap-4 bg-white dark:bg-zinc-900">
         <div>
           <div className="font-semibold">Makcom Ads</div>
-          <div className="text-xs text-zinc-500 truncate">{tenant?.name ?? "无工作区"}</div>
+          <div className="text-xs text-zinc-500 truncate">{project?.name ?? "无项目"}</div>
         </div>
         <nav className="flex flex-col gap-1 text-sm">
           {NAV.map((n) => (

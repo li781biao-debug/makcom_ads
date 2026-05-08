@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { projectClient } from "@/lib/db/projectClient";
 import {
   resolveRange,
   previousRange,
@@ -9,6 +10,7 @@ import {
   googleCampaignTypeAggregate,
   googleBreakdownTop,
   lastFetchedAt,
+  type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct, fmtNumber } from "@/components/insights/Kpi";
 import { LineChart } from "@/components/insights/LineChart";
@@ -20,14 +22,25 @@ import { Freshness } from "@/components/insights/Freshness";
 export default async function GoogleReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
-  const tenant = await getPrimaryTenant(userId);
-  if (!tenant) return <div>请先创建工作区</div>;
-
   const params = await searchParams;
+  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
+  if (!project) {
+    return (
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500">
+        当前账号没有任何项目权限，请联系管理员分配。
+      </div>
+    );
+  }
+
+  const ctx: ProjectQueryContext = {
+    client: projectClient(project.dbName),
+    tenantId: project.id,
+  };
+
   const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
 
@@ -46,19 +59,19 @@ export default async function GoogleReportPage({
     convDevice,
     fresh,
   ] = await Promise.all([
-    googleAggregate(tenant.id, range),
-    googleAggregate(tenant.id, prev),
-    googleDailySeries(tenant.id, range),
-    googleCampaignTypeAggregate(tenant.id, range),
-    googleBreakdownTop(tenant.id, range, "search_term_search", 15),
-    googleBreakdownTop(tenant.id, range, "search_term_shopping", 15),
-    googleBreakdownTop(tenant.id, range, "top_product_shopping", 10),
-    googleBreakdownTop(tenant.id, range, "final_url", 10),
-    googleBreakdownTop(tenant.id, range, "country", 10),
-    googleBreakdownTop(tenant.id, range, "conv_value_gender", 10),
-    googleBreakdownTop(tenant.id, range, "conv_value_age", 20),
-    googleBreakdownTop(tenant.id, range, "conv_value_device", 10),
-    lastFetchedAt(tenant.id),
+    googleAggregate(ctx, range),
+    googleAggregate(ctx, prev),
+    googleDailySeries(ctx, range),
+    googleCampaignTypeAggregate(ctx, range),
+    googleBreakdownTop(ctx, range, "search_term_search", 15),
+    googleBreakdownTop(ctx, range, "search_term_shopping", 15),
+    googleBreakdownTop(ctx, range, "top_product_shopping", 10),
+    googleBreakdownTop(ctx, range, "final_url", 10),
+    googleBreakdownTop(ctx, range, "country", 10),
+    googleBreakdownTop(ctx, range, "conv_value_gender", 10),
+    googleBreakdownTop(ctx, range, "conv_value_age", 20),
+    googleBreakdownTop(ctx, range, "conv_value_device", 10),
+    lastFetchedAt(ctx),
   ]);
 
   type Type = (typeof byType)[number];
@@ -111,7 +124,7 @@ export default async function GoogleReportPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} from={from} to={to} basePath="/reports/google" />
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports/google" projectSlug={project.slug} />
         <Freshness google={fresh.google} />
       </div>
 
@@ -204,4 +217,3 @@ function bkToSlices(rows: Array<{ dim1: string; totalConvValue: number }>) {
     color: colors[i],
   }));
 }
-

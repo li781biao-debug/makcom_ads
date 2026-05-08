@@ -1,16 +1,28 @@
 import { auth } from "@/auth";
-import { prisma } from "@/lib/db";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { projectClient } from "@/lib/db/projectClient";
 import { ConnectButton } from "@/components/meta/ConnectButton";
 
-export default async function ConnectionsPage() {
+export default async function ConnectionsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ project?: string }>;
+}) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
-  const tenant = await getPrimaryTenant(userId);
-  if (!tenant) return <div>请先创建工作区</div>;
+  const params = (await searchParams) ?? {};
+  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
+  if (!project) {
+    return (
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500">
+        当前账号没有任何项目权限，请联系管理员分配。
+      </div>
+    );
+  }
 
-  const connections = await prisma.metaConnection.findMany({
-    where: { tenantId: tenant.id },
+  const client = projectClient(project.dbName);
+  const connections = await client.metaConnection.findMany({
+    where: { tenantId: project.id },
     include: { adAccounts: true },
     orderBy: { connectedAt: "desc" },
   });

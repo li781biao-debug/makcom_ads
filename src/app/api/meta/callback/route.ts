@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
+import { projectClient } from "@/lib/db/projectClient";
 
 /**
  * Inbound webhook from Make.com after a tenant connects their Meta account.
@@ -11,8 +12,9 @@ import { prisma } from "@/lib/db";
  *   - X-Make-Secret header must match MAKE_SHARED_SECRET
  *   - body.state must match a row in OAuthState (not used, not expired, same tenant)
  *
- * The state mark-used + connection insert + ad account upserts all run inside one
- * Prisma transaction so a partial failure leaves the state row reusable.
+ * The state mark-used (base DB) and connection insert + ad account upserts (project DB)
+ * each run inside their own transactions. The state is marked used last so a project-DB
+ * failure leaves the state row reusable.
  */
 const Body = z.object({
   state: z.string().min(1),
@@ -61,12 +63,16 @@ export async function POST(req: Request) {
     );
   }
 
-  const connection = await prisma.$transaction(async (tx) => {
-    await tx.oAuthState.update({
-      where: { state: b.state },
-      data: { used: true },
-    });
+  const tenant = await prisma.tenant.findUnique({ where: { id: b.tenant_id } });
+  if (!tenant) {
+    return NextResponse.json(
+      { ok: false, error: { code: "TENANT_NOT_FOUND", message: "tenant missing" } },
+      { status: 404 },
+    );
+  }
 
+  const client = projectClient(tenant.dbName);
+  const connection = await client.$transaction(async (tx) => {
     const conn = await tx.metaConnection.create({
       data: {
         tenantId: b.tenant_id,
@@ -100,6 +106,11 @@ export async function POST(req: Request) {
     }
 
     return conn;
+  });
+
+  await prisma.oAuthState.update({
+    where: { state: b.state },
+    data: { used: true },
   });
 
   return NextResponse.json({ ok: true, data: { connection_id: connection.id } });

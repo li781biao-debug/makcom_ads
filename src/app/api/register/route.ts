@@ -10,6 +10,15 @@ const Body = z.object({
   tenantName: z.string().min(1),
 });
 
+function slugify(s: string): string {
+  const base = s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return base || "project";
+}
+
 export async function POST(req: Request) {
   const json = await req.json().catch(() => null);
   const parsed = Body.safeParse(json);
@@ -23,10 +32,12 @@ export async function POST(req: Request) {
   if (existing) return NextResponse.json({ error: "Email already registered" }, { status: 409 });
 
   const passwordHash = await bcrypt.hash(password, 10);
+  const slug = slugify(tenantName);
+  const dbName = `${slug.replace(/-/g, "_")}_mshop`;
 
   const user = await prisma.$transaction(async (tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0]) => {
     const u = await tx.user.create({ data: { email, name, passwordHash } });
-    const t = await tx.tenant.create({ data: { name: tenantName } });
+    const t = await tx.tenant.create({ data: { name: tenantName, slug, dbName } });
     await tx.tenantUser.create({
       data: { tenantId: t.id, userId: u.id, role: "OWNER" },
     });

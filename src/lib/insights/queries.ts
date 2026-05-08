@@ -1,7 +1,11 @@
-import { prisma } from "@/lib/db";
-import { Prisma } from "@/generated/prisma/client";
+import { Prisma, PrismaClient } from "@/generated/prisma-project/client";
 
 export type DateRange = { start: Date; end: Date };
+
+export type ProjectQueryContext = {
+  client: PrismaClient;
+  tenantId: string;
+};
 
 export function defaultRange(days = 28): DateRange {
   const end = new Date();
@@ -59,9 +63,9 @@ const dec = (v: Prisma.Decimal | null | undefined) => Number(v ?? 0);
 const big = (v: bigint | null | undefined) => Number(v ?? BigInt(0));
 
 // ---- Shopify aggregate ----
-export async function shopifyAggregate(tenantId: string, r: DateRange) {
-  const a = await prisma.shopifyDailyMetric.aggregate({
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+export async function shopifyAggregate(ctx: ProjectQueryContext, r: DateRange) {
+  const a = await ctx.client.shopifyDailyMetric.aggregate({
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: { totalSales: true, orders: true, returns: true },
   });
   const totalSales = dec(a._sum.totalSales);
@@ -76,9 +80,9 @@ export async function shopifyAggregate(tenantId: string, r: DateRange) {
 }
 
 // ---- Meta aggregate (from MetaCampaignDaily) ----
-export async function metaAggregate(tenantId: string, r: DateRange) {
-  const a = await prisma.metaCampaignDaily.aggregate({
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+export async function metaAggregate(ctx: ProjectQueryContext, r: DateRange) {
+  const a = await ctx.client.metaCampaignDaily.aggregate({
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -109,9 +113,9 @@ export async function metaAggregate(tenantId: string, r: DateRange) {
 }
 
 // ---- Google aggregate ----
-export async function googleAggregate(tenantId: string, r: DateRange) {
-  const a = await prisma.googleDailyMetric.aggregate({
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+export async function googleAggregate(ctx: ProjectQueryContext, r: DateRange) {
+  const a = await ctx.client.googleDailyMetric.aggregate({
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: {
       impressions: true,
       clicks: true,
@@ -143,20 +147,19 @@ export async function googleAggregate(tenantId: string, r: DateRange) {
 // ---- Daily series ----
 export type DailyPoint = { date: string; v1: number; v2: number };
 
-export async function shopifyDailySeries(tenantId: string, r: DateRange): Promise<DailyPoint[]> {
-  const rows = await prisma.shopifyDailyMetric.findMany({
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+export async function shopifyDailySeries(ctx: ProjectQueryContext, r: DateRange): Promise<DailyPoint[]> {
+  const rows = await ctx.client.shopifyDailyMetric.findMany({
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     orderBy: { date: "asc" },
     select: { date: true, totalSales: true },
   });
-  // also need ad cost from meta + google
-  const meta = await prisma.metaCampaignDaily.groupBy({
+  const meta = await ctx.client.metaCampaignDaily.groupBy({
     by: ["date"],
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: { spend: true },
   });
-  const google = await prisma.googleDailyMetric.findMany({
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+  const google = await ctx.client.googleDailyMetric.findMany({
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     select: { date: true, cost: true },
   });
   const adCostByDay = new Map<string, number>();
@@ -175,10 +178,10 @@ export async function shopifyDailySeries(tenantId: string, r: DateRange): Promis
   }));
 }
 
-export async function metaDailySeries(tenantId: string, r: DateRange): Promise<DailyPoint[]> {
-  const rows = await prisma.metaCampaignDaily.groupBy({
+export async function metaDailySeries(ctx: ProjectQueryContext, r: DateRange): Promise<DailyPoint[]> {
+  const rows = await ctx.client.metaCampaignDaily.groupBy({
     by: ["date"],
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: { spend: true, purchaseConvValue: true },
     orderBy: { date: "asc" },
   });
@@ -189,9 +192,9 @@ export async function metaDailySeries(tenantId: string, r: DateRange): Promise<D
   }));
 }
 
-export async function googleDailySeries(tenantId: string, r: DateRange): Promise<DailyPoint[]> {
-  const rows = await prisma.googleDailyMetric.findMany({
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+export async function googleDailySeries(ctx: ProjectQueryContext, r: DateRange): Promise<DailyPoint[]> {
+  const rows = await ctx.client.googleDailyMetric.findMany({
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     orderBy: { date: "asc" },
     select: { date: true, totalConvValue: true, cost: true },
   });
@@ -202,12 +205,36 @@ export async function googleDailySeries(tenantId: string, r: DateRange): Promise
   }));
 }
 
+// ---- Last data refresh timestamp per source ----
+
+export async function lastFetchedAt(ctx: ProjectQueryContext) {
+  const [shopify, metaCamp, metaAd, metaBk, gDaily, gType, gBk] = await Promise.all([
+    ctx.client.shopifyDailyMetric.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.metaCampaignDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.metaAdDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.metaBreakdownDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.googleDailyMetric.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.googleCampaignTypeDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.googleBreakdownDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+  ]);
+  const maxOf = (...dates: (Date | null | undefined)[]): Date | null => {
+    const valid = dates.filter((d): d is Date => d != null);
+    if (valid.length === 0) return null;
+    return new Date(Math.max(...valid.map((d) => d.getTime())));
+  };
+  return {
+    shopify: shopify._max.fetchedAt ?? null,
+    meta: maxOf(metaCamp._max.fetchedAt, metaAd._max.fetchedAt, metaBk._max.fetchedAt),
+    google: maxOf(gDaily._max.fetchedAt, gType._max.fetchedAt, gBk._max.fetchedAt),
+  };
+}
+
 // ---- Top campaigns / creatives / breakdowns ----
 
-export async function topMetaCampaigns(tenantId: string, r: DateRange, limit = 20) {
-  const rows = await prisma.metaCampaignDaily.groupBy({
+export async function topMetaCampaigns(ctx: ProjectQueryContext, r: DateRange, limit = 20) {
+  const rows = await ctx.client.metaCampaignDaily.groupBy({
     by: ["campaignId", "campaignName"],
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -234,10 +261,10 @@ export async function topMetaCampaigns(tenantId: string, r: DateRange, limit = 2
   });
 }
 
-export async function topMetaCreatives(tenantId: string, r: DateRange, limit = 20) {
-  const rows = await prisma.metaAdDaily.groupBy({
+export async function topMetaCreatives(ctx: ProjectQueryContext, r: DateRange, limit = 20) {
+  const rows = await ctx.client.metaAdDaily.groupBy({
     by: ["adId", "adName", "adCreativeImageUrl", "adBody"],
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -272,14 +299,14 @@ export async function topMetaCreatives(tenantId: string, r: DateRange, limit = 2
 }
 
 export async function metaBreakdownTop(
-  tenantId: string,
+  ctx: ProjectQueryContext,
   r: DateRange,
   breakdownType: string,
   limit = 20,
 ) {
-  const rows = await prisma.metaBreakdownDaily.groupBy({
+  const rows = await ctx.client.metaBreakdownDaily.groupBy({
     by: ["dim1", "dim2"],
-    where: { tenantId, breakdownType, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, breakdownType, date: { gte: r.start, lte: r.end } },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -306,10 +333,10 @@ export async function metaBreakdownTop(
   });
 }
 
-export async function googleCampaignTypeAggregate(tenantId: string, r: DateRange) {
-  const rows = await prisma.googleCampaignTypeDaily.groupBy({
+export async function googleCampaignTypeAggregate(ctx: ProjectQueryContext, r: DateRange) {
+  const rows = await ctx.client.googleCampaignTypeDaily.groupBy({
     by: ["campaignType"],
-    where: { tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
     _sum: {
       clicks: true,
       cost: true,
@@ -332,39 +359,15 @@ export async function googleCampaignTypeAggregate(tenantId: string, r: DateRange
   });
 }
 
-// ---- Last data refresh timestamp per source ----
-
-export async function lastFetchedAt(tenantId: string) {
-  const [shopify, metaCamp, metaAd, metaBk, gDaily, gType, gBk] = await Promise.all([
-    prisma.shopifyDailyMetric.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-    prisma.metaCampaignDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-    prisma.metaAdDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-    prisma.metaBreakdownDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-    prisma.googleDailyMetric.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-    prisma.googleCampaignTypeDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-    prisma.googleBreakdownDaily.aggregate({ where: { tenantId }, _max: { fetchedAt: true } }),
-  ]);
-  const maxOf = (...dates: (Date | null | undefined)[]): Date | null => {
-    const valid = dates.filter((d): d is Date => d != null);
-    if (valid.length === 0) return null;
-    return new Date(Math.max(...valid.map((d) => d.getTime())));
-  };
-  return {
-    shopify: shopify._max.fetchedAt ?? null,
-    meta: maxOf(metaCamp._max.fetchedAt, metaAd._max.fetchedAt, metaBk._max.fetchedAt),
-    google: maxOf(gDaily._max.fetchedAt, gType._max.fetchedAt, gBk._max.fetchedAt),
-  };
-}
-
 export async function googleBreakdownTop(
-  tenantId: string,
+  ctx: ProjectQueryContext,
   r: DateRange,
   breakdownType: string,
   limit = 20,
 ) {
-  const rows = await prisma.googleBreakdownDaily.groupBy({
+  const rows = await ctx.client.googleBreakdownDaily.groupBy({
     by: ["dim1", "dim2"],
-    where: { tenantId, breakdownType, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, breakdownType, date: { gte: r.start, lte: r.end } },
     _sum: {
       clicks: true,
       cost: true,

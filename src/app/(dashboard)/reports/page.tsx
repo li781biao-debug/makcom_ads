@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { projectClient } from "@/lib/db/projectClient";
 import {
   resolveRange,
   previousRange,
@@ -9,6 +10,7 @@ import {
   googleAggregate,
   shopifyDailySeries,
   lastFetchedAt,
+  type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct } from "@/components/insights/Kpi";
 import { LineChart } from "@/components/insights/LineChart";
@@ -27,26 +29,37 @@ type Channel = {
 export default async function ReportsOverviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
-  const tenant = await getPrimaryTenant(userId);
-  if (!tenant) return <div>请先创建工作区</div>;
-
   const params = await searchParams;
+  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
+  if (!project) {
+    return (
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500">
+        当前账号没有任何项目权限，请联系管理员分配。
+      </div>
+    );
+  }
+
+  const ctx: ProjectQueryContext = {
+    client: projectClient(project.dbName),
+    tenantId: project.id,
+  };
+
   const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
 
   const [shopify, meta, google, prevShopify, prevMeta, prevGoogle, series, fresh] = await Promise.all([
-    shopifyAggregate(tenant.id, range),
-    metaAggregate(tenant.id, range),
-    googleAggregate(tenant.id, range),
-    shopifyAggregate(tenant.id, prev),
-    metaAggregate(tenant.id, prev),
-    googleAggregate(tenant.id, prev),
-    shopifyDailySeries(tenant.id, range),
-    lastFetchedAt(tenant.id),
+    shopifyAggregate(ctx, range),
+    metaAggregate(ctx, range),
+    googleAggregate(ctx, range),
+    shopifyAggregate(ctx, prev),
+    metaAggregate(ctx, prev),
+    googleAggregate(ctx, prev),
+    shopifyDailySeries(ctx, range),
+    lastFetchedAt(ctx),
   ]);
 
   const adCost = meta.spend + google.cost;
@@ -95,7 +108,7 @@ export default async function ReportsOverviewPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} from={from} to={to} basePath="/reports" />
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports" projectSlug={project.slug} />
         <Freshness shopify={fresh.shopify} meta={fresh.meta} google={fresh.google} />
       </div>
 
@@ -184,4 +197,3 @@ export default async function ReportsOverviewPage({
     </div>
   );
 }
-

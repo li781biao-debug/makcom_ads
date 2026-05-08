@@ -5,12 +5,14 @@ type Props = {
   basePath: string;
   from?: string | null;
   to?: string | null;
+  projectSlug?: string | null;
 };
 
 const PRESETS = [7, 14, 28, 60, 90];
 
-export function DateRangeBar({ active, basePath, from, to }: Props) {
+export function DateRangeBar({ active, basePath, from, to, projectSlug }: Props) {
   const hasCustom = !!(from && to);
+  const projectQuery = projectSlug ? `&project=${encodeURIComponent(projectSlug)}` : "";
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <span className="text-zinc-500">时间范围：</span>
@@ -19,7 +21,7 @@ export function DateRangeBar({ active, basePath, from, to }: Props) {
         return (
           <Link
             key={d}
-            href={`${basePath}?days=${d}`}
+            href={`${basePath}?days=${d}${projectQuery}`}
             className={
               isActive
                 ? "px-3 py-1 rounded bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -31,6 +33,7 @@ export function DateRangeBar({ active, basePath, from, to }: Props) {
         );
       })}
       <form action={basePath} method="get" className="flex items-center gap-2 ml-2">
+        {projectSlug ? <input type="hidden" name="project" value={projectSlug} /> : null}
         <input
           type="date"
           name="from"

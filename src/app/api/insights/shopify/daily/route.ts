@@ -1,19 +1,12 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { verifyMakeSecret } from "@/lib/insights/auth";
+import { resolveProject, type ProjectContext } from "@/lib/insights/projectResolve";
 import {
   ShopifyDailyEnvelope,
   ShopifyOrdersEnvelope,
   type ShopifyOrderRawT,
 } from "@/lib/insights/schemas";
 
-/**
- * Accepts two body shapes:
- * 1. Pre-aggregated rows: { tenant_id, rows: [{date, total_sales, orders, returns, currency}] }
- * 2. Raw orders passthrough: { tenant_id, orders: [{createdAt, totalPriceSet, ...}] }
- *
- * Make.com only needs to forward the Shopify response (shape 2) — no aggregation upstream.
- */
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
   if (unauthorized) return unauthorized;
@@ -29,7 +22,9 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    return handleRawOrders(parsed.data.tenant_id, parsed.data.orders);
+    const ctx = await resolveProject(parsed.data);
+    if (ctx instanceof NextResponse) return ctx;
+    return handleRawOrders(ctx, parsed.data.orders);
   }
 
   const parsed = ShopifyDailyEnvelope.safeParse(json);
@@ -39,13 +34,15 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { tenant_id, rows } = parsed.data;
+  const ctx = await resolveProject(parsed.data);
+  if (ctx instanceof NextResponse) return ctx;
+  const { rows } = parsed.data;
 
   let upserted = 0;
-  await prisma.$transaction(async (tx) => {
+  await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
       await tx.shopifyDailyMetric.upsert({
-        where: { tenantId_date: { tenantId: tenant_id, date: r.date } },
+        where: { tenantId_date: { tenantId: ctx.tenantId, date: r.date } },
         update: {
           totalSales: r.total_sales,
           orders: r.orders,
@@ -54,7 +51,7 @@ export async function POST(req: Request) {
           fetchedAt: new Date(),
         },
         create: {
-          tenantId: tenant_id,
+          tenantId: ctx.tenantId,
           date: r.date,
           totalSales: r.total_sales,
           orders: r.orders,
@@ -69,12 +66,11 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: true, data: { upserted } });
 }
 
-async function handleRawOrders(tenantId: string, orders: ShopifyOrderRawT[]) {
+async function handleRawOrders(ctx: ProjectContext, orders: ShopifyOrderRawT[]) {
   type Bucket = { totalSales: number; orders: number; currency: string };
   const byDate = new Map<string, Bucket>();
   let skipped = 0;
   for (const o of orders) {
-    // Skip cancelled / voided / expired — matches Shopify Analytics behavior
     if (o.cancelledAt) {
       skipped++;
       continue;
@@ -83,7 +79,6 @@ async function handleRawOrders(tenantId: string, orders: ShopifyOrderRawT[]) {
       skipped++;
       continue;
     }
-    // Prefer currentTotalPriceSet (post-refund) over totalPriceSet (original)
     const priceSet = o.currentTotalPriceSet ?? o.totalPriceSet;
     if (!priceSet) {
       skipped++;
@@ -100,12 +95,12 @@ async function handleRawOrders(tenantId: string, orders: ShopifyOrderRawT[]) {
 
   const days = Array.from(byDate.keys()).sort();
   let upserted = 0;
-  await prisma.$transaction(async (tx) => {
+  await ctx.client.$transaction(async (tx) => {
     for (const dateStr of days) {
       const agg = byDate.get(dateStr)!;
       const date = new Date(dateStr + "T00:00:00Z");
       await tx.shopifyDailyMetric.upsert({
-        where: { tenantId_date: { tenantId, date } },
+        where: { tenantId_date: { tenantId: ctx.tenantId, date } },
         update: {
           totalSales: agg.totalSales.toFixed(2),
           orders: agg.orders,
@@ -113,7 +108,7 @@ async function handleRawOrders(tenantId: string, orders: ShopifyOrderRawT[]) {
           fetchedAt: new Date(),
         },
         create: {
-          tenantId,
+          tenantId: ctx.tenantId,
           date,
           totalSales: agg.totalSales.toFixed(2),
           orders: agg.orders,

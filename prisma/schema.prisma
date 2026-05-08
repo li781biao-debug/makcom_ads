@@ -1,6 +1,6 @@
-// Prisma schema for makcom-ads
-// Architecture: Next.js UI -> Next.js API -> Make.com webhooks -> Meta Graph API
-// Token never leaves Make.com. DB stores only references and synced metadata.
+// Prisma schema for makcom-ads — BASE DB
+// Holds: auth (User/Tenant/TenantUser), OAuth state, run logs (MakeJob/AuditLog).
+// BI fact tables and Meta domain objects live in per-project DBs (see prisma/project-schema/schema.prisma).
 
 generator client {
   provider = "prisma-client"
@@ -26,28 +26,21 @@ model User {
   auditLogs     AuditLog[]
 }
 
+// A "tenant" represents a project — has its own dedicated database (dbName).
+// Renamed conceptually to "project" in UI; model name kept as Tenant for backward
+// compatibility with existing tenantId columns.
 model Tenant {
   id          String   @id @default(cuid())
   name        String
+  slug        String   @unique           // e.g., "tenniix" — URL-safe identifier
+  dbName      String   @unique           // e.g., "tenniix_mshop" — actual MySQL database name
+  status      String   @default("active") // active | archived
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   members        TenantUser[]
-  metaConnections MetaConnection[]
-  adAccounts     AdAccount[]
-  campaigns      Campaign[]
-  creatives      Creative[]
-  assets         Asset[]
   auditLogs      AuditLog[]
   makeJobs       MakeJob[]
-
-  shopifyDailyMetrics       ShopifyDailyMetric[]
-  metaCampaignDailies       MetaCampaignDaily[]
-  metaAdDailies             MetaAdDaily[]
-  metaBreakdownDailies      MetaBreakdownDaily[]
-  googleDailyMetrics        GoogleDailyMetric[]
-  googleCampaignTypeDailies GoogleCampaignTypeDaily[]
-  googleBreakdownDailies    GoogleBreakdownDaily[]
 }
 
 enum TenantRole {
@@ -71,151 +64,21 @@ model TenantUser {
   @@index([userId])
 }
 
-// ===== Meta connection (token stays in Make) =====
+// ===== OAuth state nonce (Meta connect flow) =====
 
-model MetaConnection {
-  id                String   @id @default(cuid())
-  tenantId          String
-  makeConnectionRef String   // opaque ID assigned by the Make scenario
-  fbUserId          String?
-  fbUserName        String?
-  status            String   @default("active") // active | revoked | error
-  connectedAt       DateTime @default(now())
-  lastUsedAt        DateTime?
+model OAuthState {
+  state     String   @id @db.VarChar(96)
+  tenantId  String
+  userId    String?
+  purpose   String   @default("meta_connect")
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  adAccounts AdAccount[]
-
-  @@index([tenantId])
+  @@index([expiresAt])
 }
 
-// ===== Meta domain objects (synced, not source of truth) =====
-
-model AdAccount {
-  id               String   @id @default(cuid())
-  tenantId         String
-  metaConnectionId String
-  actId            String   // e.g. "act_123456"
-  name             String
-  currency         String?
-  timezoneName     String?
-  status           Int?
-  syncedAt         DateTime @default(now())
-
-  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  metaConnection MetaConnection @relation(fields: [metaConnectionId], references: [id], onDelete: Cascade)
-  campaigns      Campaign[]
-  insights       InsightCache[]
-
-  @@unique([tenantId, actId])
-  @@index([metaConnectionId])
-}
-
-model Campaign {
-  id              String   @id @default(cuid())
-  tenantId        String
-  adAccountId     String
-  metaCampaignId  String
-  name            String
-  objective       String?
-  status          String?
-  dailyBudget     Int?     // cents
-  lifetimeBudget  Int?
-  syncedAt        DateTime @default(now())
-
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  adAccount  AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
-  adSets     AdSet[]
-
-  @@unique([adAccountId, metaCampaignId])
-  @@index([tenantId])
-}
-
-model AdSet {
-  id             String   @id @default(cuid())
-  campaignId     String
-  metaAdSetId    String
-  name           String
-  status         String?
-  dailyBudget    Int?
-  billingEvent   String?
-  optimizationGoal String?
-  syncedAt       DateTime @default(now())
-
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  ads      Ad[]
-
-  @@unique([campaignId, metaAdSetId])
-}
-
-model Ad {
-  id          String   @id @default(cuid())
-  adSetId     String
-  metaAdId    String
-  name        String
-  status      String?
-  creativeId  String?
-  syncedAt    DateTime @default(now())
-
-  adSet    AdSet     @relation(fields: [adSetId], references: [id], onDelete: Cascade)
-  creative Creative? @relation(fields: [creativeId], references: [id])
-
-  @@unique([adSetId, metaAdId])
-}
-
-model Creative {
-  id              String   @id @default(cuid())
-  tenantId        String
-  metaCreativeId  String
-  name            String
-  objectStorySpec Json?
-  thumbnailUrl    String?
-  syncedAt        DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  ads    Ad[]
-
-  @@unique([tenantId, metaCreativeId])
-}
-
-enum AssetType {
-  IMAGE
-  VIDEO
-}
-
-model Asset {
-  id              String    @id @default(cuid())
-  tenantId        String
-  type            AssetType
-  metaRef         String    // image_hash or video_id
-  filename        String?
-  previewUrl      String?
-  sizeBytes       Int?
-  createdAt       DateTime  @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@index([tenantId, type])
-}
-
-// ===== Insights cache =====
-
-model InsightCache {
-  id          String   @id @default(cuid())
-  adAccountId String
-  level       String   // account | campaign | adset | ad
-  dateRange   String   // e.g. "last_7d" or "2026-04-01_2026-04-14"
-  breakdowns  String?  // comma-separated breakdown keys
-  data        Json
-  fetchedAt   DateTime @default(now())
-
-  adAccount AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
-
-  @@unique([adAccountId, level, dateRange, breakdowns])
-  @@index([fetchedAt])
-}
-
-// ===== Observability =====
+// ===== Observability (cross-project; stays in base DB) =====
 
 model MakeJob {
   id         String   @id @default(cuid())
@@ -234,20 +97,6 @@ model MakeJob {
   @@index([scenario, status])
 }
 
-// ===== OAuth state nonce (Meta connect flow) =====
-
-model OAuthState {
-  state     String   @id @db.VarChar(96)
-  tenantId  String
-  userId    String?
-  purpose   String   @default("meta_connect")
-  used      Boolean  @default(false)
-  createdAt DateTime @default(now())
-  expiresAt DateTime
-
-  @@index([expiresAt])
-}
-
 model AuditLog {
   id        String   @id @default(cuid())
   tenantId  String
@@ -260,189 +109,4 @@ model AuditLog {
   user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
-}
-
-// ===== BI / Analytics fact tables =====
-// Populated by Make.com scenarios that query Shopify, Meta Ads, Google Ads APIs and
-// transform the result rows into the shapes below. Read by Looker Studio (or our own
-// dashboards) for visualization.
-//
-// Pattern: Make.com POSTs an array of rows to /api/insights/<source>/<grain> with header
-// X-Make-Secret. Each row is upserted by its natural key (see @@unique below).
-
-// ---- Shopify (Overview tab: Total sales, Orders, Returns, AOV, ROI) ----
-
-model ShopifyDailyMetric {
-  id          String   @id @default(cuid())
-  tenantId    String
-  date        DateTime @db.Date
-  totalSales  Decimal  @db.Decimal(18, 2)
-  orders      Int      @default(0)
-  returns     Int      @default(0)
-  currency    String   @default("USD")
-  fetchedAt   DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date])
-  @@index([tenantId, date])
-}
-
-// ---- Meta Ads (Facebook, Instagram, Messenger, WhatsApp, Threads) ----
-
-// Daily campaign-level rollup. Drives the Campaigns table and Meta time-series chart.
-model MetaCampaignDaily {
-  id                 String   @id @default(cuid())
-  tenantId           String
-  date               DateTime @db.Date
-  accountId          String
-  accountName        String?
-  campaignId         String
-  campaignName       String
-  campaignObjective  String?
-  impressions        BigInt   @default(0)
-  clicksAll          BigInt   @default(0)
-  spend              Decimal  @db.Decimal(18, 4) @default(0)
-  purchases          Int      @default(0)
-  purchaseConvValue  Decimal  @db.Decimal(18, 2) @default(0)
-  addsToCart         Int      @default(0)
-  initiatedCheckouts Int      @default(0)
-  cpm                Decimal? @db.Decimal(10, 4)
-  cpcAll             Decimal? @db.Decimal(10, 4)
-  ctrAll             Decimal? @db.Decimal(10, 6)
-  roas               Decimal? @db.Decimal(10, 4)
-  fetchedAt          DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date, campaignId])
-  @@index([tenantId, date])
-  @@index([tenantId, campaignId])
-}
-
-// Daily ad-level rollup. Drives the Creatives table.
-model MetaAdDaily {
-  id                 String   @id @default(cuid())
-  tenantId           String
-  date               DateTime @db.Date
-  accountId          String
-  campaignId         String
-  adsetId            String
-  adsetName          String?
-  adId               String
-  adName             String
-  adCreativeImageUrl String?  @db.Text
-  adBody             String?  @db.Text
-  impressions        BigInt   @default(0)
-  clicksAll          BigInt   @default(0)
-  spend              Decimal  @db.Decimal(18, 4) @default(0)
-  websitePurchases   Int      @default(0)
-  purchaseConvValue  Decimal  @db.Decimal(18, 2) @default(0)
-  cpm                Decimal? @db.Decimal(10, 4)
-  cpcAll             Decimal? @db.Decimal(10, 4)
-  ctrAll             Decimal? @db.Decimal(10, 6)
-  roas               Decimal? @db.Decimal(10, 4)
-  fetchedAt          DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date, adId])
-  @@index([tenantId, date])
-  @@index([tenantId, adId])
-}
-
-// Generic daily Meta breakdowns. breakdownType ∈
-//   country | publisher_platform | promoted_object | landing_page | age_gender | device_platform
-// dim1 holds the primary key (country code, platform name, landing URL, age range, device, promoted_object signature).
-// dim2 holds gender when breakdownType=age_gender, otherwise empty string.
-// dimMeta optionally stores the full structured object (e.g. promoted_object full json from Meta).
-model MetaBreakdownDaily {
-  id                String   @id @default(cuid())
-  tenantId          String
-  date              DateTime @db.Date
-  breakdownType     String
-  dim1              String   @db.VarChar(255)
-  dim2              String   @default("") @db.VarChar(128)
-  dimMeta           Json?
-  impressions       BigInt   @default(0)
-  clicksAll         BigInt   @default(0)
-  spend             Decimal  @db.Decimal(18, 4) @default(0)
-  purchases         Int      @default(0)
-  purchaseConvValue Decimal  @db.Decimal(18, 2) @default(0)
-  roas              Decimal? @db.Decimal(10, 4)
-  fetchedAt         DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date, breakdownType, dim1, dim2])
-  @@index([tenantId, breakdownType, date])
-}
-
-// ---- Google Ads ----
-
-// Daily account-level rollup. Drives Google Key Metrics and time-series chart.
-model GoogleDailyMetric {
-  id             String   @id @default(cuid())
-  tenantId       String
-  date           DateTime @db.Date
-  impressions    BigInt   @default(0)
-  clicks         BigInt   @default(0)
-  cost           Decimal  @db.Decimal(18, 4) @default(0)
-  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
-  purchases      Int      @default(0)
-  addsToCart     Int      @default(0)
-  beginsCheckout Int      @default(0)
-  avgCpc         Decimal? @db.Decimal(10, 4)
-  ctr            Decimal? @db.Decimal(10, 6)
-  fetchedAt      DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date])
-  @@index([tenantId, date])
-}
-
-// Daily by Google campaign type (Performance Max / Search / Shopping / Video / Discovery / Display).
-model GoogleCampaignTypeDaily {
-  id             String   @id @default(cuid())
-  tenantId       String
-  date           DateTime @db.Date
-  campaignType   String
-  clicks         BigInt   @default(0)
-  cost           Decimal  @db.Decimal(18, 4) @default(0)
-  purchases      Int      @default(0)
-  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
-  roas           Decimal? @db.Decimal(10, 4)
-  fetchedAt      DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date, campaignType])
-  @@index([tenantId, date])
-}
-
-// Generic daily Google breakdowns. breakdownType ∈
-//   search_term_search | search_term_shopping | top_product_shopping | final_url
-//   | country | conv_value_gender | conv_value_age | conv_value_device
-// dim1 = search_term / product_title / final_url / country / gender / age range / device
-// dim2 = advertising_channel_type (only used for final_url; otherwise empty string)
-model GoogleBreakdownDaily {
-  id             String   @id @default(cuid())
-  tenantId       String
-  date           DateTime @db.Date
-  breakdownType  String
-  dim1           String   @db.VarChar(255)
-  dim2           String   @default("") @db.VarChar(128)
-  dimMeta        Json?
-  clicks         BigInt   @default(0)
-  cost           Decimal  @db.Decimal(18, 4) @default(0)
-  purchases      Int      @default(0)
-  totalConvValue Decimal  @db.Decimal(18, 2) @default(0)
-  allConvValue   Decimal? @db.Decimal(18, 2)
-  fetchedAt      DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, date, breakdownType, dim1, dim2])
-  @@index([tenantId, breakdownType, date])
 }

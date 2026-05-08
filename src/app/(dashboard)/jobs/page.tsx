@@ -1,15 +1,20 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { getPrimaryTenant } from "@/lib/tenant";
+import { resolveCurrentProject } from "@/lib/db/currentProject";
 
-export default async function JobsPage() {
+export default async function JobsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ project?: string }>;
+}) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
-  const tenant = await getPrimaryTenant(userId);
-  if (!tenant) return null;
+  const params = (await searchParams) ?? {};
+  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
+  if (!project) return null;
 
   const jobs = await prisma.makeJob.findMany({
-    where: { tenantId: tenant.id },
+    where: { tenantId: project.id },
     orderBy: { createdAt: "desc" },
     take: 100,
   });
