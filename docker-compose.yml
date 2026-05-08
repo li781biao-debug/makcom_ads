@@ -8,8 +8,9 @@ services:
     environment:
       MYSQL_DATABASE: makcom_ads
     ports:
-      # bind to host loopback only — external access via SSH tunnel
-      - "127.0.0.1:33307:3306"
+      # exposed externally; root has a 32-char random password.
+      # Restrict access via Aliyun security group / firewall to trusted IPs.
+      - "33307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
