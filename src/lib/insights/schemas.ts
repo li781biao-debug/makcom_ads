@@ -309,8 +309,13 @@ export const GoogleDailyRow = z
     const m = (r.metrics ?? {}) as Record<string, unknown>;
     const impressionsN = pickMetric(r.impressions as never, m, "impressions");
     const clicksN = pickMetric(r.clicks as never, m, "clicks");
+    // Prefer micros — Google Ads API only ever returns cost_micros; if Make.com
+    // also passes a `cost` field it's almost always the same raw micros value
+    // (just renamed), so trusting it would store $1 as $1,000,000.
     const costMicrosN = pickMetric(r.cost_micros, m, "costMicros", "cost_micros");
-    const cost = r.cost ?? (costMicrosN != null ? String(costMicrosN / 1_000_000) : "0");
+    const cost = costMicrosN != null
+      ? String(costMicrosN / 1_000_000)
+      : (r.cost != null ? String(r.cost) : "0");
     const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
     const totalConvValue = r.total_conv_value ?? (convValueN != null ? String(convValueN) : "0");
     const conversionsN = pickMetric(r.conversions, m, "conversions");
@@ -365,7 +370,9 @@ export const GoogleCampaignTypeRow = z
     if (!campaignType) throw new Error("campaign_type or campaign.advertisingChannelType required");
     const clicksN = pickMetric(r.clicks as never, m, "clicks");
     const costMicrosN = pickMetric(r.cost_micros, m, "costMicros", "cost_micros");
-    const cost = r.cost ?? (costMicrosN != null ? String(costMicrosN / 1_000_000) : "0");
+    const cost = costMicrosN != null
+      ? String(costMicrosN / 1_000_000)
+      : (r.cost != null ? String(r.cost) : "0");
     const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
     const totalConvValue = r.total_conv_value ?? (convValueN != null ? String(convValueN) : "0");
     const conversionsN = pickMetric(r.conversions, m, "conversions");
@@ -523,7 +530,9 @@ export const GoogleBreakdownDailyRow = z
 
     const clicksN = pickMetric(r.clicks as never, m, "clicks");
     const costMicrosN = pickMetric(r.cost_micros, m, "costMicros", "cost_micros");
-    const cost = r.cost ?? (costMicrosN != null ? String(costMicrosN / 1_000_000) : "0");
+    const cost = costMicrosN != null
+      ? String(costMicrosN / 1_000_000)
+      : (r.cost != null ? String(r.cost) : "0");
     const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
     const totalConvValue = r.total_conv_value ?? (convValueN != null ? String(convValueN) : "0");
     const conversionsN = pickMetric(r.conversions, m, "conversions");
