@@ -3,6 +3,9 @@ services:
     image: mysql:8.4
     container_name: makcom_ads_mysql
     restart: unless-stopped
+    # Re-enable mysql_native_password (disabled by default in 8.4) for older
+    # GUI clients like SQLyog that don't yet speak caching_sha2_password.
+    command: --mysql-native-password=ON
     env_file:
       - .env.production
     environment:
