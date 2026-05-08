@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
 import { getPrimaryTenant } from "@/lib/tenant";
 import {
-  defaultRange,
+  resolveRange,
   previousRange,
   pctDelta,
   googleAggregate,
@@ -20,7 +20,7 @@ import { Freshness } from "@/components/insights/Freshness";
 export default async function GoogleReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
@@ -28,8 +28,7 @@ export default async function GoogleReportPage({
   if (!tenant) return <div>请先创建工作区</div>;
 
   const params = await searchParams;
-  const days = parsePositiveInt(params.days, 28);
-  const range = defaultRange(days);
+  const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
 
   const [
@@ -112,7 +111,7 @@ export default async function GoogleReportPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} basePath="/reports/google" />
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports/google" />
         <Freshness google={fresh.google} />
       </div>
 
@@ -206,8 +205,3 @@ function bkToSlices(rows: Array<{ dim1: string; totalConvValue: number }>) {
   }));
 }
 
-function parsePositiveInt(v: string | undefined, fallback: number): number {
-  if (!v) return fallback;
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) && n > 0 && n <= 365 ? n : fallback;
-}

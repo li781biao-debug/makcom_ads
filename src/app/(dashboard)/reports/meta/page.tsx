@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
 import { getPrimaryTenant } from "@/lib/tenant";
 import {
-  defaultRange,
+  resolveRange,
   previousRange,
   pctDelta,
   metaAggregate,
@@ -21,7 +21,7 @@ import { Freshness } from "@/components/insights/Freshness";
 export default async function MetaReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
@@ -29,8 +29,7 @@ export default async function MetaReportPage({
   if (!tenant) return <div>请先创建工作区</div>;
 
   const params = await searchParams;
-  const days = parsePositiveInt(params.days, 28);
-  const range = defaultRange(days);
+  const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
 
   const [
@@ -155,7 +154,7 @@ export default async function MetaReportPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} basePath="/reports/meta" />
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports/meta" />
         <Freshness meta={fresh.meta} />
       </div>
 
@@ -244,8 +243,3 @@ function mapToSlices(m: Map<string, number>) {
   return entries.map(([label, value], i) => ({ label, value, color: colors[i] }));
 }
 
-function parsePositiveInt(v: string | undefined, fallback: number): number {
-  if (!v) return fallback;
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) && n > 0 && n <= 365 ? n : fallback;
-}

@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
 import { getPrimaryTenant } from "@/lib/tenant";
 import {
-  defaultRange,
+  resolveRange,
   previousRange,
   pctDelta,
   shopifyAggregate,
@@ -27,7 +27,7 @@ type Channel = {
 export default async function ReportsOverviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
@@ -35,8 +35,7 @@ export default async function ReportsOverviewPage({
   if (!tenant) return <div>请先创建工作区</div>;
 
   const params = await searchParams;
-  const days = parsePositiveInt(params.days, 28);
-  const range = defaultRange(days);
+  const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
 
   const [shopify, meta, google, prevShopify, prevMeta, prevGoogle, series, fresh] = await Promise.all([
@@ -96,7 +95,7 @@ export default async function ReportsOverviewPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} basePath="/reports" />
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports" />
         <Freshness shopify={fresh.shopify} meta={fresh.meta} google={fresh.google} />
       </div>
 
@@ -186,8 +185,3 @@ export default async function ReportsOverviewPage({
   );
 }
 
-function parsePositiveInt(v: string | undefined, fallback: number): number {
-  if (!v) return fallback;
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) && n > 0 && n <= 365 ? n : fallback;
-}

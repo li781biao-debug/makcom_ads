@@ -12,8 +12,10 @@ const TABS = [
 export function ReportsTabs() {
   const pathname = usePathname();
   const params = useSearchParams();
+  const from = params.get("from");
+  const to = params.get("to");
   const days = params.get("days");
-  const qs = days ? `?days=${days}` : "";
+  const qs = from && to ? `?from=${from}&to=${to}` : days ? `?days=${days}` : "";
 
   return (
     <nav className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800 -mt-2">

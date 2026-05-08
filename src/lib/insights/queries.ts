@@ -11,6 +11,36 @@ export function defaultRange(days = 28): DateRange {
   return { start, end };
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function customRange(from: string, to: string): DateRange | null {
+  if (!ISO_DATE.test(from) || !ISO_DATE.test(to)) return null;
+  const start = new Date(from + "T00:00:00Z");
+  const end = new Date(to + "T00:00:00Z");
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  if (start > end) return null;
+  return { start, end };
+}
+
+export function isoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+export type RangeParams = { days?: string; from?: string; to?: string };
+
+export function resolveRange(params: RangeParams): { range: DateRange; days: number | null; from: string | null; to: string | null } {
+  if (params.from && params.to) {
+    const r = customRange(params.from, params.to);
+    if (r) return { range: r, days: null, from: params.from, to: params.to };
+  }
+  const days = (() => {
+    if (!params.days) return 28;
+    const n = parseInt(params.days, 10);
+    return Number.isFinite(n) && n > 0 && n <= 365 ? n : 28;
+  })();
+  return { range: defaultRange(days), days, from: null, to: null };
+}
+
 export function previousRange(r: DateRange): DateRange {
   const span = Math.round((r.end.getTime() - r.start.getTime()) / 86400000) + 1;
   const prevEnd = new Date(r.start);
@@ -170,10 +200,6 @@ export async function googleDailySeries(tenantId: string, r: DateRange): Promise
     v1: dec(r.totalConvValue),
     v2: dec(r.cost),
   }));
-}
-
-function isoDay(d: Date): string {
-  return d.toISOString().slice(0, 10);
 }
 
 // ---- Top campaigns / creatives / breakdowns ----
