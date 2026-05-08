@@ -37,6 +37,19 @@ export async function POST(req: Request) {
       const first = group[0];
       const hasCategory = group.some((g) => g.conversion_action_category != null);
 
+      // Google's API forbids querying segments.conversion_action_category with
+      // traffic metrics in one GAQL — Make therefore runs two queries and
+      // concatenates results. Traffic rows have no category and carry
+      // impressions/clicks/cost; conversion rows have a category and carry
+      // conversions/conversions_value. Pick traffic from the first row that
+      // looks like a traffic row.
+      const trafficRow =
+        group.find(
+          (g) => g.conversion_action_category == null && g.impressions > BigInt(0),
+        ) ??
+        group.find((g) => g.conversion_action_category == null) ??
+        first;
+
       let purchases = 0;
       let addsToCart = 0;
       let beginsCheckout = 0;
@@ -46,6 +59,7 @@ export async function POST(req: Request) {
         // Category-segmented input: pivot conversions across rows for this date.
         let valueSum = 0;
         for (const g of group) {
+          if (g.conversion_action_category == null) continue;
           const conv = Math.floor(Number(g.conversions ?? 0));
           valueSum += Number(g.conversions_value ?? 0);
           switch (g.conversion_action_category) {
@@ -77,29 +91,29 @@ export async function POST(req: Request) {
       await tx.googleDailyMetric.upsert({
         where: { tenantId_date: { tenantId: ctx.tenantId, date: first.date } },
         update: {
-          impressions: first.impressions,
-          clicks: first.clicks,
-          cost: first.cost,
+          impressions: trafficRow.impressions,
+          clicks: trafficRow.clicks,
+          cost: trafficRow.cost,
           totalConvValue,
           purchases,
           addsToCart,
           beginsCheckout,
-          avgCpc: first.avg_cpc ?? null,
-          ctr: first.ctr ?? null,
+          avgCpc: trafficRow.avg_cpc ?? null,
+          ctr: trafficRow.ctr ?? null,
           fetchedAt: new Date(),
         },
         create: {
           tenantId: ctx.tenantId,
           date: first.date,
-          impressions: first.impressions,
-          clicks: first.clicks,
-          cost: first.cost,
+          impressions: trafficRow.impressions,
+          clicks: trafficRow.clicks,
+          cost: trafficRow.cost,
           totalConvValue,
           purchases,
           addsToCart,
           beginsCheckout,
-          avgCpc: first.avg_cpc ?? null,
-          ctr: first.ctr ?? null,
+          avgCpc: trafficRow.avg_cpc ?? null,
+          ctr: trafficRow.ctr ?? null,
         },
       });
       upserted++;
