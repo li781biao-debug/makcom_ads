@@ -46,13 +46,18 @@ export const ShopifyDailyEnvelope = RowEnvelope(ShopifyDailyRow);
 // ---- Shopify (raw orders passthrough — backend aggregates by createdAt date) ----
 // Accepts the GraphQL response shape from Shopify Search Orders module in Make.com.
 // We extract just the fields we need; ignore the rest.
+const PriceSet = z.object({
+  amount: z.union([z.string(), z.number()]).transform((v) => Number(v)),
+  currencyCode: z.string().optional(),
+});
+
 const ShopifyOrderRaw = z.object({
   id: z.string().optional(),
   createdAt: z.string().min(1),
-  totalPriceSet: z.object({
-    amount: z.union([z.string(), z.number()]).transform((v) => Number(v)),
-    currencyCode: z.string().optional(),
-  }),
+  cancelledAt: z.string().nullish(),
+  displayFinancialStatus: z.string().nullish(),
+  totalPriceSet: PriceSet.nullish(),
+  currentTotalPriceSet: PriceSet.nullish(),
 });
 export type ShopifyOrderRawT = z.infer<typeof ShopifyOrderRaw>;
 

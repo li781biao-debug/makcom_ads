@@ -72,13 +72,29 @@ export async function POST(req: Request) {
 async function handleRawOrders(tenantId: string, orders: ShopifyOrderRawT[]) {
   type Bucket = { totalSales: number; orders: number; currency: string };
   const byDate = new Map<string, Bucket>();
+  let skipped = 0;
   for (const o of orders) {
+    // Skip cancelled / voided / expired — matches Shopify Analytics behavior
+    if (o.cancelledAt) {
+      skipped++;
+      continue;
+    }
+    if (o.displayFinancialStatus === "VOIDED" || o.displayFinancialStatus === "EXPIRED") {
+      skipped++;
+      continue;
+    }
+    // Prefer currentTotalPriceSet (post-refund) over totalPriceSet (original)
+    const priceSet = o.currentTotalPriceSet ?? o.totalPriceSet;
+    if (!priceSet) {
+      skipped++;
+      continue;
+    }
     const date = o.createdAt.slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     const cur = byDate.get(date) ?? { totalSales: 0, orders: 0, currency: "USD" };
-    cur.totalSales += Number(o.totalPriceSet.amount) || 0;
+    cur.totalSales += Number(priceSet.amount) || 0;
     cur.orders += 1;
-    if (o.totalPriceSet.currencyCode) cur.currency = o.totalPriceSet.currencyCode;
+    if (priceSet.currencyCode) cur.currency = priceSet.currencyCode;
     byDate.set(date, cur);
   }
 
@@ -111,6 +127,6 @@ async function handleRawOrders(tenantId: string, orders: ShopifyOrderRawT[]) {
 
   return NextResponse.json({
     ok: true,
-    data: { upserted, days, totalOrders: orders.length },
+    data: { upserted, days, totalOrders: orders.length, skipped },
   });
 }
