@@ -8,6 +8,18 @@ const isoDate = z
   .regex(/^\d{4}-\d{2}-\d{2}/, "expected YYYY-MM-DD")
   .transform((s) => new Date(s.slice(0, 10) + "T00:00:00Z"));
 
+// Google Ads API returns segments.date nested; Make often forwards raw bundles
+// without flattening. Lift segments.date → top-level date so isoDate validates.
+function liftSegmentDate(input: unknown): unknown {
+  if (!input || typeof input !== "object") return input;
+  const r = { ...(input as Record<string, unknown>) };
+  if (r.date == null) {
+    const seg = r.segments as Record<string, unknown> | null | undefined;
+    if (seg && typeof seg.date === "string") r.date = seg.date;
+  }
+  return r;
+}
+
 const RowEnvelope = <T extends z.ZodTypeAny>(row: T) =>
   z
     .object({
@@ -286,7 +298,7 @@ function pickMetric(
   return undefined;
 }
 
-export const GoogleDailyRow = z
+export const GoogleDailyRow = z.preprocess(liftSegmentDate, z
   .object({
     date: isoDate,
     // When set (e.g. "PURCHASE", "ADD_TO_CART", "BEGIN_CHECKOUT"), this row
@@ -358,11 +370,11 @@ export const GoogleDailyRow = z
       adds_to_cart: r.adds_to_cart ?? null,
       begins_checkout: r.begins_checkout ?? null,
     };
-  });
+  }));
 export const GoogleDailyEnvelope = RowEnvelope(GoogleDailyRow);
 
 // ---- Google campaign type daily ----
-export const GoogleCampaignTypeRow = z
+export const GoogleCampaignTypeRow = z.preprocess(liftSegmentDate, z
   .object({
     date: isoDate,
     campaign_type: z.string().optional(),
@@ -405,7 +417,7 @@ export const GoogleCampaignTypeRow = z
       total_conv_value: totalConvValue,
       roas,
     };
-  });
+  }));
 export const GoogleCampaignTypeEnvelope = RowEnvelope(GoogleCampaignTypeRow);
 
 // Google Ads geo target criterion IDs → ISO 3166-1 alpha-2 codes for the
@@ -449,7 +461,7 @@ export const GOOGLE_BREAKDOWN_TYPES = [
   "conv_value_device",
 ] as const;
 
-export const GoogleBreakdownDailyRow = z
+export const GoogleBreakdownDailyRow = z.preprocess(liftSegmentDate, z
   .object({
     date: isoDate,
     breakdown_type: z.enum(GOOGLE_BREAKDOWN_TYPES),
@@ -567,5 +579,5 @@ export const GoogleBreakdownDailyRow = z
       total_conv_value: totalConvValue,
       all_conv_value: r.all_conv_value ?? null,
     };
-  });
+  }));
 export const GoogleBreakdownDailyEnvelope = RowEnvelope(GoogleBreakdownDailyRow);
