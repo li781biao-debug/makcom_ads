@@ -77,25 +77,34 @@ export async function POST(req: Request) {
       let totalConvValue = "0";
 
       if (hasCategory) {
+        // Accumulate as floats — Google's conversions are fractional. Round
+        // only at the end so we match Looker Studio (rather than summing
+        // floor() per row which under-counts by up to N for N rows).
         let valueSum = 0;
+        let purchasesF = 0;
+        let addsToCartF = 0;
+        let beginsCheckoutF = 0;
         for (const g of group) {
           if (g.conversion_action_category == null) continue;
-          const conv = Math.floor(Number(g.conversions ?? 0));
+          const conv = Number(g.conversions ?? 0);
           valueSum += Number(g.conversions_value ?? 0);
           switch (g.conversion_action_category) {
             case "PURCHASE":
-              purchases += conv;
+              purchasesF += conv;
               break;
             case "ADD_TO_CART":
-              addsToCart += conv;
+              addsToCartF += conv;
               break;
             case "BEGIN_CHECKOUT":
-              beginsCheckout += conv;
+              beginsCheckoutF += conv;
               break;
             // Other categories (LEAD, SIGNUP, PAGE_VIEW, etc.) still contribute
             // to totalConvValue but aren't surfaced as KPIs.
           }
         }
+        purchases = Math.round(purchasesF);
+        addsToCart = Math.round(addsToCartF);
+        beginsCheckout = Math.round(beginsCheckoutF);
         totalConvValue = String(valueSum);
       } else if (hasLegacyConvFields) {
         // Legacy single-payload path: row carries direct purchases/adds_to_cart.

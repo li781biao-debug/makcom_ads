@@ -340,8 +340,25 @@ export const GoogleDailyRow = z.preprocess(liftSegmentDate, z
     const cost = costMicrosN != null
       ? String(costMicrosN / 1_000_000)
       : (r.cost != null ? String(r.cost) : "0");
-    const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
-    const conversionsN = pickMetric(r.conversions, m, "conversions");
+    // Prefer all_conversions over conversions — primary "conversions" metric
+    // counts only actions flagged "Include in Conversions"; Looker Studio /
+    // Shopify dashboards usually surface all_conversions which includes
+    // secondary actions (ATC, BIC, Enhanced Conversions, etc.).
+    const convValueN = pickMetric(
+      r.conversions_value,
+      m,
+      "allConversionsValue",
+      "all_conversions_value",
+      "conversionsValue",
+      "conversions_value",
+    );
+    const conversionsN = pickMetric(
+      r.conversions,
+      m,
+      "allConversions",
+      "all_conversions",
+      "conversions",
+    );
     const cpcRawN = pickMetric(
       r.avg_cpc ?? r.average_cpc ?? r.average_cpc_micros,
       m,
@@ -402,9 +419,22 @@ export const GoogleCampaignTypeRow = z.preprocess(liftSegmentDate, z
     const cost = costMicrosN != null
       ? String(costMicrosN / 1_000_000)
       : (r.cost != null ? String(r.cost) : "0");
-    const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
+    const convValueN = pickMetric(
+      r.conversions_value,
+      m,
+      "allConversionsValue",
+      "all_conversions_value",
+      "conversionsValue",
+      "conversions_value",
+    );
     const totalConvValue = r.total_conv_value ?? (convValueN != null ? String(convValueN) : "0");
-    const conversionsN = pickMetric(r.conversions, m, "conversions");
+    const conversionsN = pickMetric(
+      r.conversions,
+      m,
+      "allConversions",
+      "all_conversions",
+      "conversions",
+    );
     const purchases = r.purchases ?? (conversionsN != null ? Math.floor(conversionsN) : 0);
     const roas =
       r.roas ?? (Number(cost) > 0 ? String(Number(totalConvValue) / Number(cost)) : null);
@@ -562,9 +592,22 @@ export const GoogleBreakdownDailyRow = z.preprocess(liftSegmentDate, z
     const cost = costMicrosN != null
       ? String(costMicrosN / 1_000_000)
       : (r.cost != null ? String(r.cost) : "0");
-    const convValueN = pickMetric(r.conversions_value, m, "conversionsValue", "conversions_value");
+    const convValueN = pickMetric(
+      r.conversions_value,
+      m,
+      "allConversionsValue",
+      "all_conversions_value",
+      "conversionsValue",
+      "conversions_value",
+    );
     const totalConvValue = r.total_conv_value ?? (convValueN != null ? String(convValueN) : "0");
-    const conversionsN = pickMetric(r.conversions, m, "conversions");
+    const conversionsN = pickMetric(
+      r.conversions,
+      m,
+      "allConversions",
+      "all_conversions",
+      "conversions",
+    );
     const purchases = r.purchases ?? (conversionsN != null ? Math.floor(conversionsN) : 0);
 
     return {
