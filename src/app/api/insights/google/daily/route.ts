@@ -43,9 +43,27 @@ export async function POST(req: Request) {
     for (const [, group] of byDate) {
       const first = group[0];
       const hasCategory = group.some((g) => g.conversion_action_category != null);
-      const allCategory = group.every((g) => g.conversion_action_category != null);
-      const hasTraffic = !allCategory; // any row without a category contributes traffic
-      const hasConversion = hasCategory;
+      const hasTrafficRow = group.some(
+        (g) => g.conversion_action_category == null,
+      );
+      // Detect rows that carry "legacy direct conversion fields" — i.e. raw
+      // purchases / adds_to_cart / conversions / total_conv_value at top level.
+      // Without this gate, a pure traffic-only request (no category, no direct
+      // conversion fields) would otherwise resolve purchases=0 and clobber
+      // existing values.
+      const hasLegacyConvFields =
+        !hasCategory &&
+        group.some(
+          (g) =>
+            g.purchases != null ||
+            g.adds_to_cart != null ||
+            g.begins_checkout != null ||
+            g.total_conv_value != null ||
+            g.conversions != null ||
+            g.conversions_value != null,
+        );
+      const updateTraffic = hasTrafficRow;
+      const updateConversions = hasCategory || hasLegacyConvFields;
 
       // Traffic row: prefer one with non-zero impressions, else any uncategorized row.
       const trafficRow =
@@ -79,8 +97,8 @@ export async function POST(req: Request) {
           }
         }
         totalConvValue = String(valueSum);
-      } else if (hasTraffic) {
-        // Legacy single-payload path: row carries direct purchases/adds_to_cart fields.
+      } else if (hasLegacyConvFields) {
+        // Legacy single-payload path: row carries direct purchases/adds_to_cart.
         purchases =
           first.purchases ??
           (first.conversions != null ? Math.floor(Number(first.conversions)) : 0);
@@ -93,21 +111,14 @@ export async function POST(req: Request) {
       const update: Prisma.GoogleDailyMetricUncheckedUpdateInput = {
         fetchedAt: new Date(),
       };
-      if (hasTraffic && trafficRow) {
+      if (updateTraffic && trafficRow) {
         update.impressions = trafficRow.impressions;
         update.clicks = trafficRow.clicks;
         update.cost = trafficRow.cost;
         update.avgCpc = trafficRow.avg_cpc ?? null;
         update.ctr = trafficRow.ctr ?? null;
       }
-      if (hasConversion) {
-        update.totalConvValue = totalConvValue;
-        update.purchases = purchases;
-        update.addsToCart = addsToCart;
-        update.beginsCheckout = beginsCheckout;
-      }
-      // Legacy mixed path also covers conversions, fall through:
-      if (!hasCategory && hasTraffic) {
+      if (updateConversions) {
         update.totalConvValue = totalConvValue;
         update.purchases = purchases;
         update.addsToCart = addsToCart;
@@ -125,10 +136,10 @@ export async function POST(req: Request) {
           cost: trafficRow?.cost ?? "0",
           avgCpc: trafficRow?.avg_cpc ?? null,
           ctr: trafficRow?.ctr ?? null,
-          totalConvValue: hasConversion ? totalConvValue : "0",
-          purchases: hasConversion ? purchases : 0,
-          addsToCart: hasConversion ? addsToCart : 0,
-          beginsCheckout: hasConversion ? beginsCheckout : 0,
+          totalConvValue: updateConversions ? totalConvValue : "0",
+          purchases: updateConversions ? purchases : 0,
+          addsToCart: updateConversions ? addsToCart : 0,
+          beginsCheckout: updateConversions ? beginsCheckout : 0,
         },
       });
       upserted++;
