@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@/generated/prisma-project/client";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
 import { GoogleDailyEnvelope } from "@/lib/insights/schemas";
@@ -19,9 +20,15 @@ export async function POST(req: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const { rows } = parsed.data;
 
-  // Group rows by date. When Make's GAQL includes
-  // `segments.conversion_action_category`, Google returns one row per
-  // (date, category) — we pivot them into a single GoogleDailyMetric record.
+  // Group rows by date. Google's API forbids mixing
+  // `segments.conversion_action_category` with traffic metrics in one GAQL,
+  // so Make typically runs two queries and either concatenates results or
+  // posts them separately. We classify each request:
+  //   - traffic-only (no row has category)        → update only impressions/clicks/cost
+  //   - conversion-only (every row has category)  → update only purchases/...
+  //   - mixed                                     → update everything
+  // Upsert preserves untouched fields, so two separate Make scenarios can
+  // safely write into the same date row without clobbering each other.
   type Row = (typeof rows)[number];
   const byDate = new Map<number, Row[]>();
   for (const r of rows) {
@@ -36,19 +43,15 @@ export async function POST(req: Request) {
     for (const [, group] of byDate) {
       const first = group[0];
       const hasCategory = group.some((g) => g.conversion_action_category != null);
+      const allCategory = group.every((g) => g.conversion_action_category != null);
+      const hasTraffic = !allCategory; // any row without a category contributes traffic
+      const hasConversion = hasCategory;
 
-      // Google's API forbids querying segments.conversion_action_category with
-      // traffic metrics in one GAQL — Make therefore runs two queries and
-      // concatenates results. Traffic rows have no category and carry
-      // impressions/clicks/cost; conversion rows have a category and carry
-      // conversions/conversions_value. Pick traffic from the first row that
-      // looks like a traffic row.
+      // Traffic row: prefer one with non-zero impressions, else any uncategorized row.
       const trafficRow =
         group.find(
           (g) => g.conversion_action_category == null && g.impressions > BigInt(0),
-        ) ??
-        group.find((g) => g.conversion_action_category == null) ??
-        first;
+        ) ?? group.find((g) => g.conversion_action_category == null);
 
       let purchases = 0;
       let addsToCart = 0;
@@ -56,7 +59,6 @@ export async function POST(req: Request) {
       let totalConvValue = "0";
 
       if (hasCategory) {
-        // Category-segmented input: pivot conversions across rows for this date.
         let valueSum = 0;
         for (const g of group) {
           if (g.conversion_action_category == null) continue;
@@ -72,13 +74,13 @@ export async function POST(req: Request) {
             case "BEGIN_CHECKOUT":
               beginsCheckout += conv;
               break;
-            // Other categories (LEAD, SIGNUP, PAGE_VIEW, etc.) contribute to
-            // total_conv_value but are not surfaced as KPIs today.
+            // Other categories (LEAD, SIGNUP, PAGE_VIEW, etc.) still contribute
+            // to totalConvValue but aren't surfaced as KPIs.
           }
         }
         totalConvValue = String(valueSum);
-      } else {
-        // Legacy single-row input: use direct fields, falling back to raw conversions.
+      } else if (hasTraffic) {
+        // Legacy single-payload path: row carries direct purchases/adds_to_cart fields.
         purchases =
           first.purchases ??
           (first.conversions != null ? Math.floor(Number(first.conversions)) : 0);
@@ -88,32 +90,45 @@ export async function POST(req: Request) {
           first.total_conv_value ?? first.conversions_value ?? "0";
       }
 
+      const update: Prisma.GoogleDailyMetricUncheckedUpdateInput = {
+        fetchedAt: new Date(),
+      };
+      if (hasTraffic && trafficRow) {
+        update.impressions = trafficRow.impressions;
+        update.clicks = trafficRow.clicks;
+        update.cost = trafficRow.cost;
+        update.avgCpc = trafficRow.avg_cpc ?? null;
+        update.ctr = trafficRow.ctr ?? null;
+      }
+      if (hasConversion) {
+        update.totalConvValue = totalConvValue;
+        update.purchases = purchases;
+        update.addsToCart = addsToCart;
+        update.beginsCheckout = beginsCheckout;
+      }
+      // Legacy mixed path also covers conversions, fall through:
+      if (!hasCategory && hasTraffic) {
+        update.totalConvValue = totalConvValue;
+        update.purchases = purchases;
+        update.addsToCart = addsToCart;
+        update.beginsCheckout = beginsCheckout;
+      }
+
       await tx.googleDailyMetric.upsert({
         where: { tenantId_date: { tenantId: ctx.tenantId, date: first.date } },
-        update: {
-          impressions: trafficRow.impressions,
-          clicks: trafficRow.clicks,
-          cost: trafficRow.cost,
-          totalConvValue,
-          purchases,
-          addsToCart,
-          beginsCheckout,
-          avgCpc: trafficRow.avg_cpc ?? null,
-          ctr: trafficRow.ctr ?? null,
-          fetchedAt: new Date(),
-        },
+        update,
         create: {
           tenantId: ctx.tenantId,
           date: first.date,
-          impressions: trafficRow.impressions,
-          clicks: trafficRow.clicks,
-          cost: trafficRow.cost,
-          totalConvValue,
-          purchases,
-          addsToCart,
-          beginsCheckout,
-          avgCpc: trafficRow.avg_cpc ?? null,
-          ctr: trafficRow.ctr ?? null,
+          impressions: trafficRow?.impressions ?? BigInt(0),
+          clicks: trafficRow?.clicks ?? BigInt(0),
+          cost: trafficRow?.cost ?? "0",
+          avgCpc: trafficRow?.avg_cpc ?? null,
+          ctr: trafficRow?.ctr ?? null,
+          totalConvValue: hasConversion ? totalConvValue : "0",
+          purchases: hasConversion ? purchases : 0,
+          addsToCart: hasConversion ? addsToCart : 0,
+          beginsCheckout: hasConversion ? beginsCheckout : 0,
         },
       });
       upserted++;
