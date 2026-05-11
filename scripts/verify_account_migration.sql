@@ -1,0 +1,11 @@
+USE tenniix_mshop;
+SELECT 'GoogleDailyMetric customerId?' AS section;
+SHOW COLUMNS FROM GoogleDailyMetric LIKE 'customer%';
+SELECT 'GoogleCampaignTypeDaily customerId?' AS section;
+SHOW COLUMNS FROM GoogleCampaignTypeDaily LIKE 'customer%';
+SELECT 'GoogleBreakdownDaily customerId?' AS section;
+SHOW COLUMNS FROM GoogleBreakdownDaily LIKE 'customer%';
+SELECT 'GoogleDailyMetric unique?' AS section;
+SHOW INDEX FROM GoogleDailyMetric WHERE Key_name LIKE '%uniq%';
+SELECT 'MetaBreakdownDaily unique?' AS section;
+SHOW INDEX FROM MetaBreakdownDaily WHERE Key_name LIKE '%uniq%';

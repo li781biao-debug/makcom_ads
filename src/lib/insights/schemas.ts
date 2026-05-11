@@ -8,32 +8,70 @@ const isoDate = z
   .regex(/^\d{4}-\d{2}-\d{2}/, "expected YYYY-MM-DD")
   .transform((s) => new Date(s.slice(0, 10) + "T00:00:00Z"));
 
-// Google Ads API returns segments.date nested; Make often forwards raw bundles
-// without flattening. Lift segments.date → top-level date so isoDate validates.
-// Same for customer.id / customer.descriptive_name → customer_id / customer_name.
+// Google Ads bundles from Make can arrive in several shapes:
+//   (a) nested:   { customer: { id, descriptiveName }, segments: { date } }
+//   (b) flat dot: { "customer.id": "...", "segments.date": "..." }
+//   (c) camelCase top-level: { customerId, customerName }
+//   (d) resourceName only: { customer: { resourceName: "customers/1234567890" } }
+// liftSegmentDate normalises all of these into top-level snake_case fields the
+// strict schema then validates.
 function liftSegmentDate(input: unknown): unknown {
   if (!input || typeof input !== "object") return input;
   const r = { ...(input as Record<string, unknown>) };
+
+  // Helper: read a value that may be nested under an object OR present as a
+  // dot-keyed flat field.
+  const readNested = (obj: Record<string, unknown>, parent: string, child: string) => {
+    const p = obj[parent];
+    if (p && typeof p === "object") {
+      const v = (p as Record<string, unknown>)[child];
+      if (v != null) return v;
+    }
+    return obj[`${parent}.${child}`];
+  };
+
+  // date ← segments.date
   if (r.date == null) {
-    const seg = r.segments as Record<string, unknown> | null | undefined;
-    if (seg && typeof seg.date === "string") r.date = seg.date;
+    const v = readNested(r, "segments", "date");
+    if (typeof v === "string") r.date = v;
   }
-  // Lift customer.id / customer.descriptiveName → customer_id / customer_name
+
+  // customer_id ← customer.id (nested or flat) ← customerId ← customer.resourceName
   if (r.customer_id == null && r.customerId == null) {
-    const cust = r.customer as Record<string, unknown> | null | undefined;
-    const id =
-      (cust?.id as string | number | undefined) ??
-      (cust?.customerId as string | number | undefined) ??
-      (cust?.customer_id as string | number | undefined);
+    let id: string | number | undefined =
+      (readNested(r, "customer", "id") as string | number | undefined) ??
+      (readNested(r, "customer", "customerId") as string | number | undefined) ??
+      (readNested(r, "customer", "customer_id") as string | number | undefined) ??
+      (r.customerId as string | number | undefined);
+    if (id == null) {
+      const rn =
+        (readNested(r, "customer", "resourceName") as string | undefined) ??
+        (readNested(r, "customer", "resource_name") as string | undefined);
+      if (typeof rn === "string" && rn.startsWith("customers/")) {
+        id = rn.slice("customers/".length);
+      }
+    }
     if (id != null) r.customer_id = String(id);
   }
+
+  // customer_name ← customer.descriptive_name (or camel)
   if (r.customer_name == null && r.customerName == null) {
-    const cust = r.customer as Record<string, unknown> | null | undefined;
     const name =
-      (cust?.descriptiveName as string | undefined) ??
-      (cust?.descriptive_name as string | undefined);
-    if (name) r.customer_name = name;
+      (readNested(r, "customer", "descriptiveName") as string | undefined) ??
+      (readNested(r, "customer", "descriptive_name") as string | undefined) ??
+      (r.customerName as string | undefined);
+    if (typeof name === "string") r.customer_name = name;
   }
+
+  // For Meta — same dot-notation might appear (account_id at top level
+  // is usually direct, but Make's Facebook Insights module sometimes nests).
+  if (r.account_id == null && r.accountId == null) {
+    const id =
+      (r.accountId as string | undefined) ??
+      (readNested(r, "account", "id") as string | undefined);
+    if (id != null) r.account_id = String(id);
+  }
+
   return r;
 }
 
