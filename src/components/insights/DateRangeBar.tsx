@@ -6,13 +6,25 @@ type Props = {
   from?: string | null;
   to?: string | null;
   projectSlug?: string | null;
+  // Additional query params to preserve across preset links + form submission
+  // (e.g. meta_account=… on /reports/meta).
+  keepParams?: Record<string, string | null | undefined>;
 };
 
 const PRESETS = [7, 14, 28, 60, 90];
 
-export function DateRangeBar({ active, basePath, from, to, projectSlug }: Props) {
+export function DateRangeBar({ active, basePath, from, to, projectSlug, keepParams }: Props) {
   const hasCustom = !!(from && to);
-  const projectQuery = projectSlug ? `&project=${encodeURIComponent(projectSlug)}` : "";
+  const params: Record<string, string> = {};
+  if (projectSlug) params.project = projectSlug;
+  if (keepParams) {
+    for (const [k, v] of Object.entries(keepParams)) {
+      if (v) params[k] = v;
+    }
+  }
+  const extraQuery = Object.entries(params)
+    .map(([k, v]) => `&${k}=${encodeURIComponent(v)}`)
+    .join("");
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <span className="text-zinc-500">时间范围：</span>
@@ -21,7 +33,7 @@ export function DateRangeBar({ active, basePath, from, to, projectSlug }: Props)
         return (
           <Link
             key={d}
-            href={`${basePath}?days=${d}${projectQuery}`}
+            href={`${basePath}?days=${d}${extraQuery}`}
             className={
               isActive
                 ? "px-3 py-1 rounded bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -33,7 +45,9 @@ export function DateRangeBar({ active, basePath, from, to, projectSlug }: Props)
         );
       })}
       <form action={basePath} method="get" className="flex items-center gap-2 ml-2">
-        {projectSlug ? <input type="hidden" name="project" value={projectSlug} /> : null}
+        {Object.entries(params).map(([k, v]) => (
+          <input key={k} type="hidden" name={k} value={v} />
+        ))}
         <input
           type="date"
           name="from"

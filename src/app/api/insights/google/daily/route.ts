@@ -30,17 +30,18 @@ export async function POST(req: Request) {
   // Upsert preserves untouched fields, so two separate Make scenarios can
   // safely write into the same date row without clobbering each other.
   type Row = (typeof rows)[number];
-  const byDate = new Map<number, Row[]>();
+  // Group by (customer_id, date) — each Google customer has its own daily row.
+  const byKey = new Map<string, Row[]>();
   for (const r of rows) {
-    const key = r.date.getTime();
-    const arr = byDate.get(key);
+    const key = `${r.customer_id}|${r.date.getTime()}`;
+    const arr = byKey.get(key);
     if (arr) arr.push(r);
-    else byDate.set(key, [r]);
+    else byKey.set(key, [r]);
   }
 
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
-    for (const [, group] of byDate) {
+    for (const [, group] of byKey) {
       const first = group[0];
       const hasCategory = group.some((g) => g.conversion_action_category != null);
       const hasTrafficRow = group.some(
@@ -119,6 +120,7 @@ export async function POST(req: Request) {
 
       const update: Prisma.GoogleDailyMetricUncheckedUpdateInput = {
         fetchedAt: new Date(),
+        customerName: first.customer_name,
       };
       if (updateTraffic && trafficRow) {
         update.impressions = trafficRow.impressions;
@@ -135,10 +137,18 @@ export async function POST(req: Request) {
       }
 
       await tx.googleDailyMetric.upsert({
-        where: { tenantId_date: { tenantId: ctx.tenantId, date: first.date } },
+        where: {
+          tenantId_customerId_date: {
+            tenantId: ctx.tenantId,
+            customerId: first.customer_id,
+            date: first.date,
+          },
+        },
         update,
         create: {
           tenantId: ctx.tenantId,
+          customerId: first.customer_id,
+          customerName: first.customer_name,
           date: first.date,
           impressions: trafficRow?.impressions ?? BigInt(0),
           clicks: trafficRow?.clicks ?? BigInt(0),

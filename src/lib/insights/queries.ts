@@ -5,6 +5,10 @@ export type DateRange = { start: Date; end: Date };
 export type ProjectQueryContext = {
   client: PrismaClient;
   tenantId: string;
+  // Optional account filters. When set, only the matching account's rows are
+  // aggregated. Null/undefined means "all accounts for this tenant".
+  metaAccountId?: string | null;
+  googleCustomerId?: string | null;
 };
 
 export function defaultRange(days = 28): DateRange {
@@ -62,7 +66,16 @@ export function pctDelta(curr: number, prev: number): number | null {
 const dec = (v: Prisma.Decimal | null | undefined) => Number(v ?? 0);
 const big = (v: bigint | null | undefined) => Number(v ?? BigInt(0));
 
-// ---- Shopify aggregate ----
+// Per-table account filter helpers — extending `where` with the optional
+// accountId / customerId in one place keeps every query concise.
+function metaWhere(ctx: ProjectQueryContext) {
+  return ctx.metaAccountId ? { accountId: ctx.metaAccountId } : {};
+}
+function googleWhere(ctx: ProjectQueryContext) {
+  return ctx.googleCustomerId ? { customerId: ctx.googleCustomerId } : {};
+}
+
+// ---- Shopify aggregate (not account-scoped) ----
 export async function shopifyAggregate(ctx: ProjectQueryContext, r: DateRange) {
   const a = await ctx.client.shopifyDailyMetric.aggregate({
     where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
@@ -82,7 +95,7 @@ export async function shopifyAggregate(ctx: ProjectQueryContext, r: DateRange) {
 // ---- Meta aggregate (from MetaCampaignDaily) ----
 export async function metaAggregate(ctx: ProjectQueryContext, r: DateRange) {
   const a = await ctx.client.metaCampaignDaily.aggregate({
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...metaWhere(ctx) },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -115,7 +128,7 @@ export async function metaAggregate(ctx: ProjectQueryContext, r: DateRange) {
 // ---- Google aggregate ----
 export async function googleAggregate(ctx: ProjectQueryContext, r: DateRange) {
   const a = await ctx.client.googleDailyMetric.aggregate({
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...googleWhere(ctx) },
     _sum: {
       impressions: true,
       clicks: true,
@@ -155,11 +168,11 @@ export async function shopifyDailySeries(ctx: ProjectQueryContext, r: DateRange)
   });
   const meta = await ctx.client.metaCampaignDaily.groupBy({
     by: ["date"],
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...metaWhere(ctx) },
     _sum: { spend: true },
   });
   const google = await ctx.client.googleDailyMetric.findMany({
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...googleWhere(ctx) },
     select: { date: true, cost: true },
   });
   const adCostByDay = new Map<string, number>();
@@ -181,7 +194,7 @@ export async function shopifyDailySeries(ctx: ProjectQueryContext, r: DateRange)
 export async function metaDailySeries(ctx: ProjectQueryContext, r: DateRange): Promise<DailyPoint[]> {
   const rows = await ctx.client.metaCampaignDaily.groupBy({
     by: ["date"],
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...metaWhere(ctx) },
     _sum: { spend: true, purchaseConvValue: true },
     orderBy: { date: "asc" },
   });
@@ -193,15 +206,17 @@ export async function metaDailySeries(ctx: ProjectQueryContext, r: DateRange): P
 }
 
 export async function googleDailySeries(ctx: ProjectQueryContext, r: DateRange): Promise<DailyPoint[]> {
-  const rows = await ctx.client.googleDailyMetric.findMany({
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+  // groupBy date so multiple customers on the same date sum correctly.
+  const rows = await ctx.client.googleDailyMetric.groupBy({
+    by: ["date"],
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...googleWhere(ctx) },
+    _sum: { totalConvValue: true, cost: true },
     orderBy: { date: "asc" },
-    select: { date: true, totalConvValue: true, cost: true },
   });
   return rows.map((r) => ({
     date: isoDay(r.date),
-    v1: dec(r.totalConvValue),
-    v2: dec(r.cost),
+    v1: dec(r._sum.totalConvValue),
+    v2: dec(r._sum.cost),
   }));
 }
 
@@ -210,12 +225,12 @@ export async function googleDailySeries(ctx: ProjectQueryContext, r: DateRange):
 export async function lastFetchedAt(ctx: ProjectQueryContext) {
   const [shopify, metaCamp, metaAd, metaBk, gDaily, gType, gBk] = await Promise.all([
     ctx.client.shopifyDailyMetric.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
-    ctx.client.metaCampaignDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
-    ctx.client.metaAdDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
-    ctx.client.metaBreakdownDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
-    ctx.client.googleDailyMetric.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
-    ctx.client.googleCampaignTypeDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
-    ctx.client.googleBreakdownDaily.aggregate({ where: { tenantId: ctx.tenantId }, _max: { fetchedAt: true } }),
+    ctx.client.metaCampaignDaily.aggregate({ where: { tenantId: ctx.tenantId, ...metaWhere(ctx) }, _max: { fetchedAt: true } }),
+    ctx.client.metaAdDaily.aggregate({ where: { tenantId: ctx.tenantId, ...metaWhere(ctx) }, _max: { fetchedAt: true } }),
+    ctx.client.metaBreakdownDaily.aggregate({ where: { tenantId: ctx.tenantId, ...metaWhere(ctx) }, _max: { fetchedAt: true } }),
+    ctx.client.googleDailyMetric.aggregate({ where: { tenantId: ctx.tenantId, ...googleWhere(ctx) }, _max: { fetchedAt: true } }),
+    ctx.client.googleCampaignTypeDaily.aggregate({ where: { tenantId: ctx.tenantId, ...googleWhere(ctx) }, _max: { fetchedAt: true } }),
+    ctx.client.googleBreakdownDaily.aggregate({ where: { tenantId: ctx.tenantId, ...googleWhere(ctx) }, _max: { fetchedAt: true } }),
   ]);
   const maxOf = (...dates: (Date | null | undefined)[]): Date | null => {
     const valid = dates.filter((d): d is Date => d != null);
@@ -229,12 +244,42 @@ export async function lastFetchedAt(ctx: ProjectQueryContext) {
   };
 }
 
+// ---- Account listing (for the dashboard switcher) ----
+
+export async function listMetaAccounts(ctx: ProjectQueryContext) {
+  const rows = await ctx.client.metaCampaignDaily.groupBy({
+    by: ["accountId", "accountName"],
+    where: { tenantId: ctx.tenantId },
+    _sum: { spend: true },
+    orderBy: { _sum: { spend: "desc" } },
+  });
+  return rows.map((r) => ({
+    accountId: r.accountId,
+    accountName: r.accountName,
+    spend: dec(r._sum.spend),
+  }));
+}
+
+export async function listGoogleAccounts(ctx: ProjectQueryContext) {
+  const rows = await ctx.client.googleDailyMetric.groupBy({
+    by: ["customerId", "customerName"],
+    where: { tenantId: ctx.tenantId },
+    _sum: { cost: true },
+    orderBy: { _sum: { cost: "desc" } },
+  });
+  return rows.map((r) => ({
+    customerId: r.customerId,
+    customerName: r.customerName,
+    cost: dec(r._sum.cost),
+  }));
+}
+
 // ---- Top campaigns / creatives / breakdowns ----
 
 export async function topMetaCampaigns(ctx: ProjectQueryContext, r: DateRange, limit = 20) {
   const rows = await ctx.client.metaCampaignDaily.groupBy({
     by: ["campaignId", "campaignName"],
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...metaWhere(ctx) },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -264,7 +309,7 @@ export async function topMetaCampaigns(ctx: ProjectQueryContext, r: DateRange, l
 export async function topMetaCreatives(ctx: ProjectQueryContext, r: DateRange, limit = 20) {
   const rows = await ctx.client.metaAdDaily.groupBy({
     by: ["adId", "adName", "adCreativeImageUrl", "adBody"],
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...metaWhere(ctx) },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -306,7 +351,7 @@ export async function metaBreakdownTop(
 ) {
   const rows = await ctx.client.metaBreakdownDaily.groupBy({
     by: ["dim1", "dim2"],
-    where: { tenantId: ctx.tenantId, breakdownType, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, breakdownType, date: { gte: r.start, lte: r.end }, ...metaWhere(ctx) },
     _sum: {
       impressions: true,
       clicksAll: true,
@@ -336,7 +381,7 @@ export async function metaBreakdownTop(
 export async function googleCampaignTypeAggregate(ctx: ProjectQueryContext, r: DateRange) {
   const rows = await ctx.client.googleCampaignTypeDaily.groupBy({
     by: ["campaignType"],
-    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, date: { gte: r.start, lte: r.end }, ...googleWhere(ctx) },
     _sum: {
       clicks: true,
       cost: true,
@@ -367,7 +412,7 @@ export async function googleBreakdownTop(
 ) {
   const rows = await ctx.client.googleBreakdownDaily.groupBy({
     by: ["dim1", "dim2"],
-    where: { tenantId: ctx.tenantId, breakdownType, date: { gte: r.start, lte: r.end } },
+    where: { tenantId: ctx.tenantId, breakdownType, date: { gte: r.start, lte: r.end }, ...googleWhere(ctx) },
     _sum: {
       clicks: true,
       cost: true,

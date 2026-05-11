@@ -10,6 +10,7 @@ import {
   googleCampaignTypeAggregate,
   googleBreakdownTop,
   lastFetchedAt,
+  listGoogleAccounts,
   type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct, fmtNumber } from "@/components/insights/Kpi";
@@ -18,11 +19,12 @@ import { DataTable, Col } from "@/components/insights/DataTable";
 import { DateRangeBar } from "@/components/insights/DateRangeBar";
 import { PieChart, autoColors } from "@/components/insights/PieChart";
 import { Freshness } from "@/components/insights/Freshness";
+import { AdAccountSwitcher } from "@/components/insights/AdAccountSwitcher";
 
 export default async function GoogleReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string; google_account?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
@@ -36,10 +38,14 @@ export default async function GoogleReportPage({
     );
   }
 
+  const client = projectClient(project.dbName);
+  const customerId = params.google_account || null;
   const ctx: ProjectQueryContext = {
-    client: projectClient(project.dbName),
+    client,
     tenantId: project.id,
+    googleCustomerId: customerId,
   };
+  const accounts = await listGoogleAccounts({ client, tenantId: project.id });
 
   const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
@@ -124,9 +130,21 @@ export default async function GoogleReportPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} from={from} to={to} basePath="/reports/google" projectSlug={project.slug} />
+        <DateRangeBar
+          active={days}
+          from={from}
+          to={to}
+          basePath="/reports/google"
+          projectSlug={project.slug}
+          keepParams={{ google_account: customerId }}
+        />
         <Freshness google={fresh.google} />
       </div>
+      <AdAccountSwitcher
+        label="Google 账户"
+        paramName="google_account"
+        accounts={accounts.map((a) => ({ id: a.customerId, name: a.customerName }))}
+      />
 
       <section>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

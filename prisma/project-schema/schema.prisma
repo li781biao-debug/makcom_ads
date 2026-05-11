@@ -226,6 +226,8 @@ model MetaBreakdownDaily {
   id                String   @id @default(cuid())
   tenantId          String
   date              DateTime @db.Date
+  accountId         String
+  accountName       String?
   breakdownType     String
   dim1              String   @db.VarChar(255)
   dim2              String   @default("") @db.VarChar(128)
@@ -238,14 +240,17 @@ model MetaBreakdownDaily {
   roas              Decimal? @db.Decimal(10, 4)
   fetchedAt         DateTime @default(now())
 
-  @@unique([tenantId, date, breakdownType, dim1, dim2])
+  @@unique([tenantId, accountId, date, breakdownType, dim1, dim2])
   @@index([tenantId, breakdownType, date])
+  @@index([tenantId, accountId])
 }
 
 model GoogleDailyMetric {
   id             String   @id @default(cuid())
   tenantId       String
   date           DateTime @db.Date
+  customerId     String
+  customerName   String?
   impressions    BigInt   @default(0)
   clicks         BigInt   @default(0)
   cost           Decimal  @db.Decimal(18, 4) @default(0)
@@ -257,14 +262,17 @@ model GoogleDailyMetric {
   ctr            Decimal? @db.Decimal(10, 6)
   fetchedAt      DateTime @default(now())
 
-  @@unique([tenantId, date])
+  @@unique([tenantId, customerId, date])
   @@index([tenantId, date])
+  @@index([tenantId, customerId])
 }
 
 model GoogleCampaignTypeDaily {
   id             String   @id @default(cuid())
   tenantId       String
   date           DateTime @db.Date
+  customerId     String
+  customerName   String?
   campaignType   String
   clicks         BigInt   @default(0)
   cost           Decimal  @db.Decimal(18, 4) @default(0)
@@ -273,14 +281,17 @@ model GoogleCampaignTypeDaily {
   roas           Decimal? @db.Decimal(10, 4)
   fetchedAt      DateTime @default(now())
 
-  @@unique([tenantId, date, campaignType])
+  @@unique([tenantId, customerId, date, campaignType])
   @@index([tenantId, date])
+  @@index([tenantId, customerId])
 }
 
 model GoogleBreakdownDaily {
   id             String   @id @default(cuid())
   tenantId       String
   date           DateTime @db.Date
+  customerId     String
+  customerName   String?
   breakdownType  String
   dim1           String   @db.VarChar(255)
   dim2           String   @default("") @db.VarChar(128)
@@ -292,6 +303,7 @@ model GoogleBreakdownDaily {
   allConvValue   Decimal? @db.Decimal(18, 2)
   fetchedAt      DateTime @default(now())
 
-  @@unique([tenantId, date, breakdownType, dim1, dim2])
+  @@unique([tenantId, customerId, date, breakdownType, dim1, dim2])
   @@index([tenantId, breakdownType, date])
+  @@index([tenantId, customerId])
 }

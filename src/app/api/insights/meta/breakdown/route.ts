@@ -27,8 +27,9 @@ export async function POST(req: Request) {
         r.dim_meta == null ? Prisma.DbNull : (r.dim_meta as Prisma.InputJsonValue);
       await tx.metaBreakdownDaily.upsert({
         where: {
-          tenantId_date_breakdownType_dim1_dim2: {
+          tenantId_accountId_date_breakdownType_dim1_dim2: {
             tenantId: ctx.tenantId,
+            accountId: r.account_id,
             date: r.date,
             breakdownType: r.breakdown_type,
             dim1: r.dim1,
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
           },
         },
         update: {
+          accountName: r.account_name,
           dimMeta,
           impressions: r.impressions,
           clicksAll: r.clicks_all,
@@ -47,6 +49,8 @@ export async function POST(req: Request) {
         },
         create: {
           tenantId: ctx.tenantId,
+          accountId: r.account_id,
+          accountName: r.account_name,
           date: r.date,
           breakdownType: r.breakdown_type,
           dim1: r.dim1,

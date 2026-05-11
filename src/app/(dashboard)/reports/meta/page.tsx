@@ -11,6 +11,7 @@ import {
   topMetaCreatives,
   metaBreakdownTop,
   lastFetchedAt,
+  listMetaAccounts,
   type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct, fmtNumber } from "@/components/insights/Kpi";
@@ -19,11 +20,12 @@ import { DataTable, Col } from "@/components/insights/DataTable";
 import { DateRangeBar } from "@/components/insights/DateRangeBar";
 import { PieChart, autoColors } from "@/components/insights/PieChart";
 import { Freshness } from "@/components/insights/Freshness";
+import { AdAccountSwitcher } from "@/components/insights/AdAccountSwitcher";
 
 export default async function MetaReportPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string }>;
+  searchParams: Promise<{ days?: string; from?: string; to?: string; project?: string; meta_account?: string }>;
 }) {
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
@@ -37,10 +39,14 @@ export default async function MetaReportPage({
     );
   }
 
+  const client = projectClient(project.dbName);
+  const accountId = params.meta_account || null;
   const ctx: ProjectQueryContext = {
-    client: projectClient(project.dbName),
+    client,
     tenantId: project.id,
+    metaAccountId: accountId,
   };
+  const accounts = await listMetaAccounts({ client, tenantId: project.id });
 
   const { range, days, from, to } = resolveRange(params);
   const prev = previousRange(range);
@@ -167,9 +173,21 @@ export default async function MetaReportPage({
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <DateRangeBar active={days} from={from} to={to} basePath="/reports/meta" projectSlug={project.slug} />
+        <DateRangeBar
+          active={days}
+          from={from}
+          to={to}
+          basePath="/reports/meta"
+          projectSlug={project.slug}
+          keepParams={{ meta_account: accountId }}
+        />
         <Freshness meta={fresh.meta} />
       </div>
+      <AdAccountSwitcher
+        label="Meta 账户"
+        paramName="meta_account"
+        accounts={accounts.map((a) => ({ id: a.accountId, name: a.accountName }))}
+      />
 
       <section>
         <div className="text-xs text-zinc-500 mb-3">Including data from Facebook, Instagram, Messenger, WhatsApp and Threads</div>

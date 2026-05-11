@@ -10,12 +10,29 @@ const isoDate = z
 
 // Google Ads API returns segments.date nested; Make often forwards raw bundles
 // without flattening. Lift segments.date → top-level date so isoDate validates.
+// Same for customer.id / customer.descriptive_name → customer_id / customer_name.
 function liftSegmentDate(input: unknown): unknown {
   if (!input || typeof input !== "object") return input;
   const r = { ...(input as Record<string, unknown>) };
   if (r.date == null) {
     const seg = r.segments as Record<string, unknown> | null | undefined;
     if (seg && typeof seg.date === "string") r.date = seg.date;
+  }
+  // Lift customer.id / customer.descriptiveName → customer_id / customer_name
+  if (r.customer_id == null && r.customerId == null) {
+    const cust = r.customer as Record<string, unknown> | null | undefined;
+    const id =
+      (cust?.id as string | number | undefined) ??
+      (cust?.customerId as string | number | undefined) ??
+      (cust?.customer_id as string | number | undefined);
+    if (id != null) r.customer_id = String(id);
+  }
+  if (r.customer_name == null && r.customerName == null) {
+    const cust = r.customer as Record<string, unknown> | null | undefined;
+    const name =
+      (cust?.descriptiveName as string | undefined) ??
+      (cust?.descriptive_name as string | undefined);
+    if (name) r.customer_name = name;
   }
   return r;
 }
@@ -235,6 +252,8 @@ export const MetaBreakdownDailyRow = z
   .object({
     date: isoDate.optional(),
     date_start: isoDate.optional(),
+    account_id: z.string().min(1),
+    account_name: z.string().nullish(),
     breakdown_type: z.enum(META_BREAKDOWN_TYPES),
     dim1: z.string().min(1).max(255),
     dim2: z.string().max(128).optional().default(""),
@@ -260,6 +279,8 @@ export const MetaBreakdownDailyRow = z
       r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
     return {
       date,
+      account_id: r.account_id,
+      account_name: r.account_name ?? null,
       breakdown_type: r.breakdown_type,
       dim1: r.dim1,
       dim2: r.dim2,
@@ -301,6 +322,9 @@ function pickMetric(
 export const GoogleDailyRow = z.preprocess(liftSegmentDate, z
   .object({
     date: isoDate,
+    customer_id: z.union([z.string(), z.number()]).transform((v) => String(v)),
+    customer_name: z.string().nullish(),
+    customer: looseRecord.nullish(),
     // When set (e.g. "PURCHASE", "ADD_TO_CART", "BEGIN_CHECKOUT"), this row
     // is one slice of the day — the route groups by date and pivots conversions
     // into purchases / adds_to_cart / begins_checkout. May arrive flat or
@@ -370,6 +394,8 @@ export const GoogleDailyRow = z.preprocess(liftSegmentDate, z
     const ctrN = pickMetric(r.ctr, m, "ctr");
     return {
       date: r.date,
+      customer_id: r.customer_id,
+      customer_name: r.customer_name ?? null,
       conversion_action_category: category ? category.toUpperCase() : null,
       // Traffic metrics — Google duplicates these across category-segmented rows,
       // so the route takes any one row's value.
@@ -394,6 +420,9 @@ export const GoogleDailyEnvelope = RowEnvelope(GoogleDailyRow);
 export const GoogleCampaignTypeRow = z.preprocess(liftSegmentDate, z
   .object({
     date: isoDate,
+    customer_id: z.union([z.string(), z.number()]).transform((v) => String(v)),
+    customer_name: z.string().nullish(),
+    customer: looseRecord.nullish(),
     campaign_type: z.string().optional(),
     clicks: bigintLike.nullish(),
     cost: decimalLike.nullish(),
@@ -440,6 +469,8 @@ export const GoogleCampaignTypeRow = z.preprocess(liftSegmentDate, z
       r.roas ?? (Number(cost) > 0 ? String(Number(totalConvValue) / Number(cost)) : null);
     return {
       date: r.date,
+      customer_id: r.customer_id,
+      customer_name: r.customer_name ?? null,
       campaign_type: campaignType,
       clicks: BigInt(Math.trunc(clicksN ?? 0)),
       cost,
@@ -494,6 +525,9 @@ export const GOOGLE_BREAKDOWN_TYPES = [
 export const GoogleBreakdownDailyRow = z.preprocess(liftSegmentDate, z
   .object({
     date: isoDate,
+    customer_id: z.union([z.string(), z.number()]).transform((v) => String(v)),
+    customer_name: z.string().nullish(),
+    customer: looseRecord.nullish(),
     breakdown_type: z.enum(GOOGLE_BREAKDOWN_TYPES),
     dim1: z.string().max(255).optional(),
     dim2: z.string().max(128).optional().default(""),
@@ -612,6 +646,8 @@ export const GoogleBreakdownDailyRow = z.preprocess(liftSegmentDate, z
 
     return {
       date: r.date,
+      customer_id: r.customer_id,
+      customer_name: r.customer_name ?? null,
       breakdown_type: r.breakdown_type,
       dim1,
       dim2,

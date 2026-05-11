@@ -27,8 +27,9 @@ export async function POST(req: Request) {
         r.dim_meta == null ? Prisma.DbNull : (r.dim_meta as Prisma.InputJsonValue);
       await tx.googleBreakdownDaily.upsert({
         where: {
-          tenantId_date_breakdownType_dim1_dim2: {
+          tenantId_customerId_date_breakdownType_dim1_dim2: {
             tenantId: ctx.tenantId,
+            customerId: r.customer_id,
             date: r.date,
             breakdownType: r.breakdown_type,
             dim1: r.dim1,
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
           },
         },
         update: {
+          customerName: r.customer_name,
           dimMeta,
           clicks: r.clicks,
           cost: r.cost,
@@ -46,6 +48,8 @@ export async function POST(req: Request) {
         },
         create: {
           tenantId: ctx.tenantId,
+          customerId: r.customer_id,
+          customerName: r.customer_name,
           date: r.date,
           breakdownType: r.breakdown_type,
           dim1: r.dim1,

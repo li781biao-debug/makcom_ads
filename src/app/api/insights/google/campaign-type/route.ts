@@ -24,13 +24,15 @@ export async function POST(req: Request) {
     for (const r of rows) {
       await tx.googleCampaignTypeDaily.upsert({
         where: {
-          tenantId_date_campaignType: {
+          tenantId_customerId_date_campaignType: {
             tenantId: ctx.tenantId,
+            customerId: r.customer_id,
             date: r.date,
             campaignType: r.campaign_type,
           },
         },
         update: {
+          customerName: r.customer_name,
           clicks: r.clicks,
           cost: r.cost,
           purchases: r.purchases,
@@ -40,6 +42,8 @@ export async function POST(req: Request) {
         },
         create: {
           tenantId: ctx.tenantId,
+          customerId: r.customer_id,
+          customerName: r.customer_name,
           date: r.date,
           campaignType: r.campaign_type,
           clicks: r.clicks,

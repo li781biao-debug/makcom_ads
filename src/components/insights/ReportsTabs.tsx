@@ -16,6 +16,8 @@ export function ReportsTabs() {
   const to = params.get("to");
   const days = params.get("days");
   const project = params.get("project");
+  const metaAccount = params.get("meta_account");
+  const googleAccount = params.get("google_account");
 
   const parts: string[] = [];
   if (from && to) {
@@ -24,6 +26,10 @@ export function ReportsTabs() {
     parts.push(`days=${days}`);
   }
   if (project) parts.push(`project=${encodeURIComponent(project)}`);
+  // Pass through whichever per-platform account filter applies. We forward
+  // both so switching tabs preserves user's selection per platform.
+  if (metaAccount) parts.push(`meta_account=${encodeURIComponent(metaAccount)}`);
+  if (googleAccount) parts.push(`google_account=${encodeURIComponent(googleAccount)}`);
   const qs = parts.length ? `?${parts.join("&")}` : "";
 
   return (
