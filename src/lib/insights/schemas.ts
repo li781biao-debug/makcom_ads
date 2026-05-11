@@ -87,10 +87,36 @@ const RowEnvelope = <T extends z.ZodTypeAny>(row: T) =>
     });
 
 // Meta API actions[] / action_values[] item shape
-const ActionItem = z.object({
-  action_type: z.string(),
-  value: z.union([z.string(), z.number()]).transform((v) => Number(v)),
-});
+// Meta returns each action with action_type + optional value. With per-window
+// attribution (7d_click / 1d_view) enabled, some action rows split values into
+// sub-fields and omit the top-level `value`. Be lenient: fall back to summing
+// the known window fields, then default to 0 so the row still validates.
+const ActionItem = z
+  .object({
+    action_type: z.string(),
+    value: z.union([z.string(), z.number()]).nullish(),
+    "1d_click": z.union([z.string(), z.number()]).nullish(),
+    "7d_click": z.union([z.string(), z.number()]).nullish(),
+    "28d_click": z.union([z.string(), z.number()]).nullish(),
+    "1d_view": z.union([z.string(), z.number()]).nullish(),
+    "7d_view": z.union([z.string(), z.number()]).nullish(),
+    "28d_view": z.union([z.string(), z.number()]).nullish(),
+  })
+  .transform((r) => {
+    if (r.value != null) return { action_type: r.action_type, value: Number(r.value) };
+    // Sum across windows when top-level value isn't reported.
+    const fields = ["1d_click", "7d_click", "28d_click", "1d_view", "7d_view", "28d_view"] as const;
+    let sum = 0;
+    let seen = false;
+    for (const f of fields) {
+      const v = r[f];
+      if (v != null) {
+        sum += Number(v);
+        seen = true;
+      }
+    }
+    return { action_type: r.action_type, value: seen ? sum : 0 };
+  });
 type ActionItemT = z.infer<typeof ActionItem>;
 
 function findActionValue(arr: ActionItemT[] | null | undefined, type: string): number | undefined {
