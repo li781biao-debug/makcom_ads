@@ -123,6 +123,46 @@ function findActionValue(arr: ActionItemT[] | null | undefined, type: string): n
   return arr?.find((a) => a.action_type === type)?.value;
 }
 
+// Try multiple action_type candidates in order; return value of first one found.
+// Different Meta accounts surface different action_types — some have
+// `omni_purchase` (the canonical "Omni purchases" KPI), others only have
+// `purchase` or `offsite_conversion.fb_pixel_purchase`. We pick whichever
+// the account actually reports rather than failing back to a (possibly
+// inflated) top-level field.
+function findFirstAction(
+  arr: ActionItemT[] | null | undefined,
+  ...types: string[]
+): number | undefined {
+  if (!arr) return undefined;
+  for (const t of types) {
+    const item = arr.find((a) => a.action_type === t);
+    if (item) return item.value;
+  }
+  return undefined;
+}
+
+const PURCHASE_TYPES = [
+  "omni_purchase",
+  "purchase",
+  "offsite_conversion.fb_pixel_purchase",
+  "onsite_web_purchase",
+  "onsite_web_app_purchase",
+] as const;
+
+const ADD_TO_CART_TYPES = [
+  "omni_add_to_cart",
+  "add_to_cart",
+  "offsite_conversion.fb_pixel_add_to_cart",
+  "onsite_web_add_to_cart",
+] as const;
+
+const INITIATED_CHECKOUT_TYPES = [
+  "omni_initiated_checkout",
+  "initiate_checkout",
+  "offsite_conversion.fb_pixel_initiate_checkout",
+  "onsite_web_initiate_checkout",
+] as const;
+
 // Meta returns CTR as a percentage (1.23 = 1.23%); we store as decimal (0.0123).
 function normalizeCtr(v: string | null | undefined): string | null {
   if (v == null) return null;
@@ -202,12 +242,22 @@ export const MetaCampaignDailyRow = z
   .transform((r) => {
     const date = r.date ?? r.date_start;
     if (!date) throw new Error("date or date_start required");
-    const purchases = r.purchases ?? findActionValue(r.actions, "omni_purchase") ?? 0;
-    const purchaseConvValue =
-      r.purchase_conv_value ?? String(findActionValue(r.action_values, "omni_purchase") ?? 0);
-    const addsToCart = r.adds_to_cart ?? findActionValue(r.actions, "omni_add_to_cart") ?? 0;
+    // Prefer action-array extraction over top-level fields — top-level might
+    // be mapped to a Make-computed "Purchases" total that sums multiple
+    // action_types and over-counts vs Meta UI.
+    const purchases =
+      findFirstAction(r.actions, ...PURCHASE_TYPES) ?? r.purchases ?? 0;
+    const purchaseConvValue = String(
+      findFirstAction(r.action_values, ...PURCHASE_TYPES) ??
+        r.purchase_conv_value ??
+        0,
+    );
+    const addsToCart =
+      findFirstAction(r.actions, ...ADD_TO_CART_TYPES) ?? r.adds_to_cart ?? 0;
     const initiatedCheckouts =
-      r.initiated_checkouts ?? findActionValue(r.actions, "omni_initiated_checkout") ?? 0;
+      findFirstAction(r.actions, ...INITIATED_CHECKOUT_TYPES) ??
+      r.initiated_checkouts ??
+      0;
     const spend = r.spend ?? "0";
     const roas =
       r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
@@ -265,17 +315,14 @@ export const MetaAdDailyRow = z
     const date = r.date ?? r.date_start;
     if (!date) throw new Error("date or date_start required");
     const websitePurchases =
+      findFirstAction(r.actions, ...PURCHASE_TYPES) ??
       r.website_purchases ??
-      findActionValue(r.actions, "omni_purchase") ??
-      findActionValue(r.actions, "purchase") ??
       0;
-    const purchaseConvValue =
-      r.purchase_conv_value ??
-      String(
-        findActionValue(r.action_values, "omni_purchase") ??
-          findActionValue(r.action_values, "purchase") ??
-          0,
-      );
+    const purchaseConvValue = String(
+      findFirstAction(r.action_values, ...PURCHASE_TYPES) ??
+        r.purchase_conv_value ??
+        0,
+    );
     const spend = r.spend ?? "0";
     const roas =
       r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
@@ -335,9 +382,13 @@ export const MetaBreakdownDailyRow = z
   .transform((r) => {
     const date = r.date ?? r.date_start;
     if (!date) throw new Error("date or date_start required");
-    const purchases = r.purchases ?? findActionValue(r.actions, "omni_purchase") ?? 0;
-    const purchaseConvValue =
-      r.purchase_conv_value ?? String(findActionValue(r.action_values, "omni_purchase") ?? 0);
+    const purchases =
+      findFirstAction(r.actions, ...PURCHASE_TYPES) ?? r.purchases ?? 0;
+    const purchaseConvValue = String(
+      findFirstAction(r.action_values, ...PURCHASE_TYPES) ??
+        r.purchase_conv_value ??
+        0,
+    );
     const spend = r.spend ?? "0";
     const roas =
       r.roas ?? (Number(spend) > 0 ? String(Number(purchaseConvValue) / Number(spend)) : null);
