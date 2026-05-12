@@ -11,6 +11,7 @@ import {
   googleBreakdownTop,
   lastFetchedAt,
   listGoogleAccounts,
+  sumNumeric,
   type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct, fmtNumber } from "@/components/insights/Kpi";
@@ -54,12 +55,12 @@ export default async function GoogleReportPage({
     google,
     prevGoogle,
     series,
-    byType,
-    searchTermsSearch,
-    searchTermsShopping,
-    products,
-    finalUrls,
-    country,
+    byType, prevByType,
+    searchTermsSearch, prevSearchTermsSearch,
+    searchTermsShopping, prevSearchTermsShopping,
+    products, prevProducts,
+    finalUrls, prevFinalUrls,
+    country, prevCountry,
     convGender,
     convAge,
     convDevice,
@@ -69,11 +70,17 @@ export default async function GoogleReportPage({
     googleAggregate(ctx, prev),
     googleDailySeries(ctx, range),
     googleCampaignTypeAggregate(ctx, range),
-    googleBreakdownTop(ctx, range, "search_term_search", 15),
-    googleBreakdownTop(ctx, range, "search_term_shopping", 15),
-    googleBreakdownTop(ctx, range, "top_product_shopping", 10),
-    googleBreakdownTop(ctx, range, "final_url", 10),
-    googleBreakdownTop(ctx, range, "country", 10),
+    googleCampaignTypeAggregate(ctx, prev),
+    googleBreakdownTop(ctx, range, "search_term_search", 30),
+    googleBreakdownTop(ctx, prev, "search_term_search", 200),
+    googleBreakdownTop(ctx, range, "search_term_shopping", 30),
+    googleBreakdownTop(ctx, prev, "search_term_shopping", 200),
+    googleBreakdownTop(ctx, range, "top_product_shopping", 20),
+    googleBreakdownTop(ctx, prev, "top_product_shopping", 100),
+    googleBreakdownTop(ctx, range, "final_url", 20),
+    googleBreakdownTop(ctx, prev, "final_url", 100),
+    googleBreakdownTop(ctx, range, "country", 30),
+    googleBreakdownTop(ctx, prev, "country", 100),
     googleBreakdownTop(ctx, range, "conv_value_gender", 10),
     googleBreakdownTop(ctx, range, "conv_value_age", 20),
     googleBreakdownTop(ctx, range, "conv_value_device", 10),
@@ -81,46 +88,124 @@ export default async function GoogleReportPage({
   ]);
 
   type Type = (typeof byType)[number];
+  type Bk = (typeof searchTermsSearch)[number];
+
+  function typeTotals(arr: Type[]): Type {
+    const t = sumNumeric(arr, {
+      campaignType: "总计",
+      clicks: 0,
+      cost: 0,
+      purchases: 0,
+      convValue: 0,
+      roas: 0,
+    } as Type);
+    return { ...t, roas: t.cost > 0 ? t.convValue / t.cost : 0 };
+  }
+  function bkTotals(arr: Bk[]): Bk {
+    const t = sumNumeric(arr, {
+      dim1: "总计",
+      dim2: "",
+      clicks: 0,
+      cost: 0,
+      purchases: 0,
+      totalConvValue: 0,
+      allConvValue: 0,
+      roas: 0,
+    } as Bk);
+    return { ...t, roas: t.cost > 0 ? t.totalConvValue / t.cost : 0 };
+  }
+  const byTypeTotal = typeTotals(byType);
+  const prevByTypeTotal = typeTotals(prevByType);
+  const sttSearchTotal = bkTotals(searchTermsSearch);
+  const prevSttSearchTotal = bkTotals(prevSearchTermsSearch);
+  const sttShopTotal = bkTotals(searchTermsShopping);
+  const prevSttShopTotal = bkTotals(prevSearchTermsShopping);
+  const productsTotal = bkTotals(products);
+  const prevProductsTotal = bkTotals(prevProducts);
+  const finalUrlsTotal = bkTotals(finalUrls);
+  const prevFinalUrlsTotal = bkTotals(prevFinalUrls);
+  const countryTotal = bkTotals(country);
+  const prevCountryTotal = bkTotals(prevCountry);
+
   const typeCols: Col<Type>[] = [
     { key: "t", header: "Campaign type", render: (r) => r.campaignType },
-    { key: "clicks", header: "Clicks", render: (r) => fmtCompact(Number(r.clicks)), align: "right" },
-    { key: "cost", header: "Cost", render: (r) => fmtMoney(r.cost), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
+    { key: "clicks", header: "Clicks", align: "right",
+      render: (r) => fmtCompact(Number(r.clicks)),
+      delta: (c, p) => p ? pctDelta(Number(c.clicks), Number(p.clicks)) : null },
+    { key: "cost", header: "Cost", align: "right",
+      render: (r) => fmtMoney(r.cost),
+      delta: (c, p) => p ? pctDelta(c.cost, p.cost) : null },
+    { key: "purchases", header: "Purchase", align: "right",
+      render: (r) => fmtNumber(r.purchases),
+      delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+    { key: "conv", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.convValue),
+      delta: (c, p) => p ? pctDelta(c.convValue, p.convValue) : null },
+    { key: "roas", header: "ROAS", align: "right",
+      render: (r) => r.roas.toFixed(2),
+      delta: (c, p) => p ? pctDelta(c.roas, p.roas) : null },
   ];
 
-  type Bk = (typeof searchTermsSearch)[number];
   const searchTermCols: Col<Bk>[] = [
     { key: "term", header: "Search term", render: (r) => <span className="text-xs">{r.dim1}</span> },
-    { key: "clicks", header: "Clicks", render: (r) => fmtNumber(Number(r.clicks)), align: "right" },
-    { key: "cost", header: "Cost", render: (r) => fmtMoney(r.cost), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.totalConvValue), align: "right" },
+    { key: "clicks", header: "Clicks", align: "right",
+      render: (r) => fmtNumber(Number(r.clicks)),
+      delta: (c, p) => p ? pctDelta(Number(c.clicks), Number(p.clicks)) : null },
+    { key: "cost", header: "Cost", align: "right",
+      render: (r) => fmtMoney(r.cost),
+      delta: (c, p) => p ? pctDelta(c.cost, p.cost) : null },
+    { key: "purchases", header: "Purchase", align: "right",
+      render: (r) => fmtNumber(r.purchases),
+      delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+    { key: "conv", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.totalConvValue),
+      delta: (c, p) => p ? pctDelta(c.totalConvValue, p.totalConvValue) : null },
   ];
 
   const productCols: Col<Bk>[] = [
     { key: "p", header: "Product", render: (r) => <span className="text-xs">{r.dim1.slice(0, 80)}</span> },
-    { key: "clicks", header: "Clicks", render: (r) => fmtNumber(Number(r.clicks)), align: "right" },
-    { key: "cost", header: "Cost", render: (r) => fmtMoney(r.cost), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "All conv. value", render: (r) => fmtMoney(r.allConvValue), align: "right" },
+    { key: "clicks", header: "Clicks", align: "right",
+      render: (r) => fmtNumber(Number(r.clicks)),
+      delta: (c, p) => p ? pctDelta(Number(c.clicks), Number(p.clicks)) : null },
+    { key: "cost", header: "Cost", align: "right",
+      render: (r) => fmtMoney(r.cost),
+      delta: (c, p) => p ? pctDelta(c.cost, p.cost) : null },
+    { key: "purchases", header: "Purchase", align: "right",
+      render: (r) => fmtNumber(r.purchases),
+      delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+    { key: "conv", header: "All conv. value", align: "right",
+      render: (r) => fmtMoney(r.allConvValue),
+      delta: (c, p) => p ? pctDelta(c.allConvValue, p.allConvValue) : null },
   ];
 
   const finalUrlCols: Col<Bk>[] = [
     { key: "ch", header: "Channel", render: (r) => r.dim2 || "—" },
     { key: "url", header: "Final URL", render: (r) => <span className="text-xs">{r.dim1}</span> },
-    { key: "clicks", header: "Clicks", render: (r) => fmtNumber(Number(r.clicks)), align: "right" },
-    { key: "cost", header: "Cost", render: (r) => fmtMoney(r.cost), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.totalConvValue), align: "right" },
+    { key: "clicks", header: "Clicks", align: "right",
+      render: (r) => fmtNumber(Number(r.clicks)),
+      delta: (c, p) => p ? pctDelta(Number(c.clicks), Number(p.clicks)) : null },
+    { key: "cost", header: "Cost", align: "right",
+      render: (r) => fmtMoney(r.cost),
+      delta: (c, p) => p ? pctDelta(c.cost, p.cost) : null },
+    { key: "conv", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.totalConvValue),
+      delta: (c, p) => p ? pctDelta(c.totalConvValue, p.totalConvValue) : null },
   ];
 
   const countryCols: Col<Bk>[] = [
     { key: "c", header: "Country", render: (r) => r.dim1 },
-    { key: "cost", header: "Cost", render: (r) => fmtMoney(r.cost), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.totalConvValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
+    { key: "cost", header: "Cost", align: "right",
+      render: (r) => fmtMoney(r.cost),
+      delta: (c, p) => p ? pctDelta(c.cost, p.cost) : null },
+    { key: "purchases", header: "Purchase", align: "right",
+      render: (r) => fmtNumber(r.purchases),
+      delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+    { key: "conv", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.totalConvValue),
+      delta: (c, p) => p ? pctDelta(c.totalConvValue, p.totalConvValue) : null },
+    { key: "roas", header: "ROAS", align: "right",
+      render: (r) => r.roas.toFixed(2),
+      delta: (c, p) => p ? pctDelta(c.roas, p.roas) : null },
   ];
 
   const genderSlices = bkToSlices(convGender);
@@ -191,19 +276,73 @@ export default async function GoogleReportPage({
         />
       </section>
 
-      <DataTable title="Top campaign types" rows={byType} cols={typeCols} />
+      <DataTable
+        title="Top campaign types"
+        rows={byType}
+        cols={typeCols}
+        prevRows={prevByType}
+        identity={(r) => r.campaignType}
+        totalsRow={byTypeTotal}
+        prevTotalsRow={prevByTypeTotal}
+        maxHeight={500}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DataTable title="Top search terms — Search Ads" rows={searchTermsSearch} cols={searchTermCols} />
-        <DataTable title="Top search terms — Shopping Ads" rows={searchTermsShopping} cols={searchTermCols} />
+        <DataTable
+          title="Top search terms — Search Ads"
+          rows={searchTermsSearch}
+          cols={searchTermCols}
+          prevRows={prevSearchTermsSearch}
+          identity={(r) => r.dim1}
+          totalsRow={sttSearchTotal}
+          prevTotalsRow={prevSttSearchTotal}
+          maxHeight={500}
+        />
+        <DataTable
+          title="Top search terms — Shopping Ads"
+          rows={searchTermsShopping}
+          cols={searchTermCols}
+          prevRows={prevSearchTermsShopping}
+          identity={(r) => r.dim1}
+          totalsRow={sttShopTotal}
+          prevTotalsRow={prevSttShopTotal}
+          maxHeight={500}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DataTable title="Top products — Shopping Ads" rows={products} cols={productCols} />
-        <DataTable title="Final URLs" rows={finalUrls} cols={finalUrlCols} />
+        <DataTable
+          title="Top products — Shopping Ads"
+          rows={products}
+          cols={productCols}
+          prevRows={prevProducts}
+          identity={(r) => r.dim1}
+          totalsRow={productsTotal}
+          prevTotalsRow={prevProductsTotal}
+          maxHeight={500}
+        />
+        <DataTable
+          title="Final URLs"
+          rows={finalUrls}
+          cols={finalUrlCols}
+          prevRows={prevFinalUrls}
+          identity={(r) => `${r.dim1}|${r.dim2}`}
+          totalsRow={finalUrlsTotal}
+          prevTotalsRow={prevFinalUrlsTotal}
+          maxHeight={500}
+        />
       </div>
 
-      <DataTable title="Top country / territory" rows={country} cols={countryCols} />
+      <DataTable
+        title="Top country / territory"
+        rows={country}
+        cols={countryCols}
+        prevRows={prevCountry}
+        identity={(r) => r.dim1}
+        totalsRow={countryTotal}
+        prevTotalsRow={prevCountryTotal}
+        maxHeight={500}
+      />
 
       <section>
         <h2 className="text-base font-medium mb-3">Conv. value breakdown</h2>

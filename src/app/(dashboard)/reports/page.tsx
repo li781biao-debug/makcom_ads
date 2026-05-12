@@ -97,12 +97,51 @@ export default async function ReportsOverviewPage({
     },
   ];
 
+  const prevChannelRows: Channel[] = [
+    {
+      channel: "Google Ads",
+      cost: prevGoogle.cost,
+      purchases: prevGoogle.purchases,
+      convValue: prevGoogle.totalConvValue,
+      roas: prevGoogle.roas,
+    },
+    {
+      channel: "Meta Ads",
+      cost: prevMeta.spend,
+      purchases: prevMeta.purchases,
+      convValue: prevMeta.purchaseConvValue,
+      roas: prevMeta.roas,
+    },
+  ];
+  const channelTotal: Channel = {
+    channel: "总计",
+    cost: adCost,
+    purchases: totalPurchases,
+    convValue: totalConvValue,
+    roas: adCost > 0 ? totalConvValue / adCost : 0,
+  };
+  const prevChannelTotal: Channel = {
+    channel: "总计",
+    cost: prevAdCost,
+    purchases: prevTotalPurchases,
+    convValue: prevTotalConvValue,
+    roas: prevAdCost > 0 ? prevTotalConvValue / prevAdCost : 0,
+  };
+
   const channelCols: Col<Channel>[] = [
     { key: "channel", header: "渠道", render: (r) => r.channel },
-    { key: "cost", header: "Spend", render: (r) => fmtMoney(r.cost), align: "right" },
-    { key: "purchases", header: "Purchases", render: (r) => fmtCompact(r.purchases), align: "right" },
-    { key: "convValue", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
+    { key: "cost", header: "Spend", align: "right",
+      render: (r) => fmtMoney(r.cost),
+      delta: (c, p) => p ? pctDelta(c.cost, p.cost) : null },
+    { key: "purchases", header: "Purchases", align: "right",
+      render: (r) => fmtCompact(r.purchases),
+      delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+    { key: "convValue", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.convValue),
+      delta: (c, p) => p ? pctDelta(c.convValue, p.convValue) : null },
+    { key: "roas", header: "ROAS", align: "right",
+      render: (r) => r.roas.toFixed(2),
+      delta: (c, p) => p ? pctDelta(c.roas, p.roas) : null },
   ];
 
   return (
@@ -192,7 +231,15 @@ export default async function ReportsOverviewPage({
       </section>
 
       <section>
-        <DataTable title="Ad channel" rows={channelRows} cols={channelCols} />
+        <DataTable
+          title="Ad channel"
+          rows={channelRows}
+          cols={channelCols}
+          prevRows={prevChannelRows}
+          identity={(r) => r.channel}
+          totalsRow={channelTotal}
+          prevTotalsRow={prevChannelTotal}
+        />
       </section>
     </div>
   );

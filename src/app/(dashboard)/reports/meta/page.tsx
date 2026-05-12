@@ -12,6 +12,7 @@ import {
   metaBreakdownTop,
   lastFetchedAt,
   listMetaAccounts,
+  sumNumeric,
   type ProjectQueryContext,
 } from "@/lib/insights/queries";
 import { Kpi, fmtCompact, fmtMoney, fmtPct, fmtNumber } from "@/components/insights/Kpi";
@@ -56,11 +57,17 @@ export default async function MetaReportPage({
     prevMeta,
     series,
     campaigns,
+    prevCampaigns,
     creatives,
+    prevCreatives,
     byCountry,
+    prevByCountry,
     byPlatform,
+    prevByPlatform,
     byPromoted,
+    prevByPromoted,
     byLanding,
+    prevByLanding,
     byAgeGender,
     byDevice,
     fresh,
@@ -68,28 +75,120 @@ export default async function MetaReportPage({
     metaAggregate(ctx, range),
     metaAggregate(ctx, prev),
     metaDailySeries(ctx, range),
-    topMetaCampaigns(ctx, range, 30),
+    topMetaCampaigns(ctx, range, 50),
+    topMetaCampaigns(ctx, prev, 200),
     topMetaCreatives(ctx, range, 20),
-    metaBreakdownTop(ctx, range, "country", 15),
-    metaBreakdownTop(ctx, range, "publisher_platform", 10),
-    metaBreakdownTop(ctx, range, "promoted_object", 10),
-    metaBreakdownTop(ctx, range, "landing_page", 10),
+    topMetaCreatives(ctx, prev, 200),
+    metaBreakdownTop(ctx, range, "country", 30),
+    metaBreakdownTop(ctx, prev, "country", 200),
+    metaBreakdownTop(ctx, range, "publisher_platform", 20),
+    metaBreakdownTop(ctx, prev, "publisher_platform", 50),
+    metaBreakdownTop(ctx, range, "promoted_object", 20),
+    metaBreakdownTop(ctx, prev, "promoted_object", 100),
+    metaBreakdownTop(ctx, range, "landing_page", 20),
+    metaBreakdownTop(ctx, prev, "landing_page", 100),
     metaBreakdownTop(ctx, range, "age_gender", 50),
     metaBreakdownTop(ctx, range, "device_platform", 10),
     lastFetchedAt(ctx),
   ]);
 
+  // ---- Totals + previous totals (re-derive ratios after summing) ----
   type Camp = (typeof campaigns)[number];
+  type Creative = (typeof creatives)[number];
+  type Bk = (typeof byCountry)[number];
+
+  function campTotals(arr: Camp[]): Camp {
+    const t = sumNumeric(arr, {
+      campaignId: "__totals__",
+      campaignName: "总计",
+      impressions: 0,
+      clicks: 0,
+      spend: 0,
+      purchases: 0,
+      convValue: 0,
+      roas: 0,
+    } as Camp);
+    return { ...t, roas: t.spend > 0 ? t.convValue / t.spend : 0 };
+  }
+
+  function creativeTotals(arr: Creative[]): Creative {
+    const t = sumNumeric(arr, {
+      adId: "__totals__",
+      adName: "总计",
+      adCreativeImageUrl: null,
+      adBody: null,
+      impressions: 0,
+      clicks: 0,
+      spend: 0,
+      websitePurchases: 0,
+      convValue: 0,
+      cpm: 0,
+      ctr: 0,
+      cpc: 0,
+      roas: 0,
+    } as Creative);
+    const impr = Number(t.impressions);
+    const clk = Number(t.clicks);
+    return {
+      ...t,
+      cpm: impr > 0 ? (t.spend / impr) * 1000 : 0,
+      ctr: impr > 0 ? clk / impr : 0,
+      cpc: clk > 0 ? t.spend / clk : 0,
+      roas: t.spend > 0 ? t.convValue / t.spend : 0,
+    };
+  }
+
+  function bkTotals(arr: Bk[], label: string): Bk {
+    const t = sumNumeric(arr, {
+      dim1: label,
+      dim2: "",
+      impressions: 0,
+      clicks: 0,
+      spend: 0,
+      purchases: 0,
+      convValue: 0,
+      roas: 0,
+    } as Bk);
+    return { ...t, roas: t.spend > 0 ? t.convValue / t.spend : 0 };
+  }
+
+  const campTotal = campTotals(campaigns);
+  const prevCampTotal = campTotals(prevCampaigns);
+  const creativeTotal = creativeTotals(creatives);
+  const prevCreativeTotal = creativeTotals(prevCreatives);
+  const countryTotal = bkTotals(byCountry, "总计");
+  const prevCountryTotal = bkTotals(prevByCountry, "总计");
+  const platformTotal = bkTotals(byPlatform, "总计");
+  const prevPlatformTotal = bkTotals(prevByPlatform, "总计");
+  const promotedTotal = bkTotals(byPromoted, "总计");
+  const prevPromotedTotal = bkTotals(prevByPromoted, "总计");
+  const landingTotal = bkTotals(byLanding, "总计");
+  const prevLandingTotal = bkTotals(prevByLanding, "总计");
+
+  // Small helpers — reduce repetition in column delta callbacks.
+  const dNum = <K extends string>(key: K) =>
+    (c: Record<K, number | bigint>, p?: Record<K, number | bigint>) =>
+      p ? pctDelta(Number(c[key]), Number(p[key])) : null;
+
   const campCols: Col<Camp>[] = [
     { key: "name", header: "Campaign name", render: (r) => <span className="text-xs">{r.campaignName}</span> },
-    { key: "clicks", header: "Clicks", render: (r) => fmtCompact(Number(r.clicks)), align: "right" },
-    { key: "spend", header: "Spend", render: (r) => fmtMoney(r.spend), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
+    { key: "clicks", header: "Clicks", align: "right",
+      render: (r) => fmtCompact(Number(r.clicks)),
+      delta: (c, p) => p ? pctDelta(Number(c.clicks), Number(p.clicks)) : null },
+    { key: "spend", header: "Spend", align: "right",
+      render: (r) => fmtMoney(r.spend),
+      delta: (c, p) => p ? pctDelta(c.spend, p.spend) : null },
+    { key: "purchases", header: "Purchase", align: "right",
+      render: (r) => fmtNumber(r.purchases),
+      delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+    { key: "conv", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.convValue),
+      delta: (c, p) => p ? pctDelta(c.convValue, p.convValue) : null },
+    { key: "roas", header: "ROAS", align: "right",
+      render: (r) => r.roas.toFixed(2),
+      delta: (c, p) => p ? pctDelta(c.roas, p.roas) : null },
   ];
 
-  type Creative = (typeof creatives)[number];
   const creativeCols: Col<Creative>[] = [
     {
       key: "img",
@@ -112,47 +211,51 @@ export default async function MetaReportPage({
         </div>
       ),
     },
-    { key: "cpm", header: "CPM", render: (r) => r.cpm.toFixed(0), align: "right" },
-    { key: "ctr", header: "CTR", render: (r) => fmtPct(r.ctr, 1), align: "right" },
-    { key: "cpc", header: "CPC", render: (r) => r.cpc.toFixed(2), align: "right" },
-    { key: "spend", header: "Spent", render: (r) => fmtMoney(r.spend), align: "right" },
-    { key: "purchases", header: "Purchases", render: (r) => fmtNumber(r.websitePurchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
+    { key: "cpm", header: "CPM", align: "right",
+      render: (r) => r.cpm.toFixed(0),
+      delta: (c, p) => p ? pctDelta(c.cpm, p.cpm) : null },
+    { key: "ctr", header: "CTR", align: "right",
+      render: (r) => fmtPct(r.ctr, 1),
+      delta: (c, p) => p ? pctDelta(c.ctr, p.ctr) : null },
+    { key: "cpc", header: "CPC", align: "right",
+      render: (r) => r.cpc.toFixed(2),
+      delta: (c, p) => p ? pctDelta(c.cpc, p.cpc) : null },
+    { key: "spend", header: "Spent", align: "right",
+      render: (r) => fmtMoney(r.spend),
+      delta: (c, p) => p ? pctDelta(c.spend, p.spend) : null },
+    { key: "purchases", header: "Purchases", align: "right",
+      render: (r) => fmtNumber(r.websitePurchases),
+      delta: (c, p) => p ? pctDelta(c.websitePurchases, p.websitePurchases) : null },
+    { key: "conv", header: "Conv. value", align: "right",
+      render: (r) => fmtMoney(r.convValue),
+      delta: (c, p) => p ? pctDelta(c.convValue, p.convValue) : null },
+    { key: "roas", header: "ROAS", align: "right",
+      render: (r) => r.roas.toFixed(2),
+      delta: (c, p) => p ? pctDelta(c.roas, p.roas) : null },
   ];
 
-  type Bk = (typeof byCountry)[number];
-  const countryCols: Col<Bk>[] = [
-    { key: "country", header: "Country", render: (r) => r.dim1 },
-    { key: "spend", header: "Amount spent", render: (r) => fmtMoney(r.spend), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
-  ];
+  function bkCols(label: string): Col<Bk>[] {
+    return [
+      { key: "dim1", header: label, render: (r) => <span className="text-xs">{r.dim1}</span> },
+      { key: "spend", header: "Spend", align: "right",
+        render: (r) => fmtMoney(r.spend),
+        delta: (c, p) => p ? pctDelta(c.spend, p.spend) : null },
+      { key: "purchases", header: "Purchase", align: "right",
+        render: (r) => fmtNumber(r.purchases),
+        delta: (c, p) => p ? pctDelta(c.purchases, p.purchases) : null },
+      { key: "conv", header: "Conv. value", align: "right",
+        render: (r) => fmtMoney(r.convValue),
+        delta: (c, p) => p ? pctDelta(c.convValue, p.convValue) : null },
+      { key: "roas", header: "ROAS", align: "right",
+        render: (r) => r.roas.toFixed(2),
+        delta: (c, p) => p ? pctDelta(c.roas, p.roas) : null },
+    ];
+  }
 
-  const platformCols: Col<Bk>[] = [
-    { key: "p", header: "Publisher platform", render: (r) => r.dim1 },
-    { key: "spend", header: "Spend", render: (r) => fmtMoney(r.spend), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
-  ];
-
-  const promotedCols: Col<Bk>[] = [
-    { key: "p", header: "Promoted object", render: (r) => <span className="text-xs">{r.dim1}</span> },
-    { key: "spend", header: "Spend", render: (r) => fmtMoney(r.spend), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
-  ];
-
-  const landingCols: Col<Bk>[] = [
-    { key: "u", header: "Landing page", render: (r) => <span className="text-xs">{r.dim1}</span> },
-    { key: "spend", header: "Spend", render: (r) => fmtMoney(r.spend), align: "right" },
-    { key: "purchases", header: "Purchase", render: (r) => fmtNumber(r.purchases), align: "right" },
-    { key: "conv", header: "Conv. value", render: (r) => fmtMoney(r.convValue), align: "right" },
-    { key: "roas", header: "ROAS", render: (r) => r.roas.toFixed(2), align: "right" },
-  ];
+  const countryCols  = bkCols("Country");
+  const platformCols = bkCols("Publisher platform");
+  const promotedCols = bkCols("Promoted object");
+  const landingCols  = bkCols("Landing page");
 
   // Aggregate age_gender into two pies: gender, age
   const genderAgg = new Map<string, number>();
@@ -231,16 +334,61 @@ export default async function MetaReportPage({
         />
       </section>
 
-      <DataTable title={`Campaigns (top ${campaigns.length})`} rows={campaigns} cols={campCols} />
+      <DataTable
+        title={`Campaigns (top ${campaigns.length})`}
+        rows={campaigns}
+        cols={campCols}
+        prevRows={prevCampaigns}
+        identity={(r) => r.campaignId}
+        totalsRow={campTotal}
+        prevTotalsRow={prevCampTotal}
+        maxHeight={500}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DataTable title="Country / Territory" rows={byCountry} cols={countryCols} />
-        <DataTable title="Publisher platform" rows={byPlatform} cols={platformCols} />
+        <DataTable
+          title="Country / Territory"
+          rows={byCountry}
+          cols={countryCols}
+          prevRows={prevByCountry}
+          identity={(r) => r.dim1}
+          totalsRow={countryTotal}
+          prevTotalsRow={prevCountryTotal}
+          maxHeight={500}
+        />
+        <DataTable
+          title="Publisher platform"
+          rows={byPlatform}
+          cols={platformCols}
+          prevRows={prevByPlatform}
+          identity={(r) => r.dim1}
+          totalsRow={platformTotal}
+          prevTotalsRow={prevPlatformTotal}
+          maxHeight={500}
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <DataTable title="Promoted object" rows={byPromoted} cols={promotedCols} />
-        <DataTable title="Landing page" rows={byLanding} cols={landingCols} />
+        <DataTable
+          title="Promoted object"
+          rows={byPromoted}
+          cols={promotedCols}
+          prevRows={prevByPromoted}
+          identity={(r) => r.dim1}
+          totalsRow={promotedTotal}
+          prevTotalsRow={prevPromotedTotal}
+          maxHeight={500}
+        />
+        <DataTable
+          title="Landing page"
+          rows={byLanding}
+          cols={landingCols}
+          prevRows={prevByLanding}
+          identity={(r) => r.dim1}
+          totalsRow={landingTotal}
+          prevTotalsRow={prevLandingTotal}
+          maxHeight={500}
+        />
       </div>
 
       <section>
@@ -261,7 +409,16 @@ export default async function MetaReportPage({
         </div>
       </section>
 
-      <DataTable title={`Creatives (top ${creatives.length})`} rows={creatives} cols={creativeCols} />
+      <DataTable
+        title={`Creatives (top ${creatives.length})`}
+        rows={creatives}
+        cols={creativeCols}
+        prevRows={prevCreatives}
+        identity={(r) => r.adId}
+        totalsRow={creativeTotal}
+        prevTotalsRow={prevCreativeTotal}
+        maxHeight={600}
+      />
     </div>
   );
 }

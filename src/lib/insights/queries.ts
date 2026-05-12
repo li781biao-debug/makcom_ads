@@ -66,6 +66,26 @@ export function pctDelta(curr: number, prev: number): number | null {
 const dec = (v: Prisma.Decimal | null | undefined) => Number(v ?? 0);
 const big = (v: bigint | null | undefined) => Number(v ?? BigInt(0));
 
+// Build a totals row by summing all numeric (number / bigint) fields across
+// the rows array. Non-numeric fields keep their base value (e.g. the label
+// for the first column = "总计"). Derived metrics like ROAS need to be
+// re-computed by the caller after summing.
+export function sumNumeric<T extends Record<string, unknown>>(rows: T[], base: T): T {
+  const result: Record<string, unknown> = { ...base };
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      const v = (r as Record<string, unknown>)[k];
+      const acc = result[k];
+      if (typeof v === "bigint" && typeof acc === "bigint") {
+        result[k] = acc + v;
+      } else if (typeof v === "number" && typeof acc === "number") {
+        result[k] = acc + v;
+      }
+    }
+  }
+  return result as T;
+}
+
 // Per-table account filter helpers — extending `where` with the optional
 // accountId / customerId in one place keeps every query concise.
 function metaWhere(ctx: ProjectQueryContext) {
