@@ -3,10 +3,27 @@ import { z } from "zod";
 const decimalLike = z.union([z.number(), z.string()]).transform((v) => String(v));
 const intLike = z.union([z.number(), z.string()]).transform((v) => Math.trunc(Number(v)));
 const bigintLike = z.union([z.number(), z.string()]).transform((v) => BigInt(String(v).split(".")[0]));
+// Account timezone for date normalisation. The tenniix Ads accounts report
+// in CST (UTC+8) — Make serializes its datetime variables as UTC, so a
+// 5/9 local date arrives as "2026-05-08T16:00:00Z". Naive slice(0,10) would
+// store these rows under 5/8. Convert ISO datetimes back to the account TZ
+// before extracting the date component.
+const ACCOUNT_TZ_OFFSET_HOURS = 8;
+
 const isoDate = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}/, "expected YYYY-MM-DD")
-  .transform((s) => new Date(s.slice(0, 10) + "T00:00:00Z"));
+  .transform((s) => {
+    // Pure date string — no timezone gymnastics needed.
+    if (s.length <= 10) return new Date(s.slice(0, 10) + "T00:00:00Z");
+    // Full ISO datetime: parse, shift into account TZ, then take the date.
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) {
+      return new Date(s.slice(0, 10) + "T00:00:00Z");
+    }
+    const shifted = new Date(d.getTime() + ACCOUNT_TZ_OFFSET_HOURS * 3600 * 1000);
+    return new Date(shifted.toISOString().slice(0, 10) + "T00:00:00Z");
+  });
 
 // Google Ads bundles from Make can arrive in several shapes:
 //   (a) nested:   { customer: { id, descriptiveName }, segments: { date } }
