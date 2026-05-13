@@ -8,6 +8,7 @@ import {
   parseRowsLenient,
   type ShopifyOrderRawT,
 } from "@/lib/insights/schemas";
+import { makeFxLookup, mulMoney } from "@/lib/insights/fx";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
@@ -40,25 +41,28 @@ export async function POST(req: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const { valid: rows, skipped, errorSamples } = parseRowsLenient(ShopifyDailyRow, env.data.rows);
 
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
+      const rate = await fx(r.currency);
+      const totalSalesUsd = mulMoney(r.total_sales, rate);
       await tx.shopifyDailyMetric.upsert({
         where: { tenantId_date: { tenantId: ctx.tenantId, date: r.date } },
         update: {
-          totalSales: r.total_sales,
+          totalSales: totalSalesUsd,
           orders: r.orders,
           returns: r.returns,
-          currency: r.currency,
+          currency: "USD",
           fetchedAt: new Date(),
         },
         create: {
           tenantId: ctx.tenantId,
           date: r.date,
-          totalSales: r.total_sales,
+          totalSales: totalSalesUsd,
           orders: r.orders,
           returns: r.returns,
-          currency: r.currency,
+          currency: "USD",
         },
       });
       upserted++;
@@ -99,26 +103,29 @@ async function handleRawOrders(ctx: ProjectContext, orders: ShopifyOrderRawT[]) 
   }
 
   const days = Array.from(byDate.keys()).sort();
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const dateStr of days) {
       const agg = byDate.get(dateStr)!;
       const date = new Date(dateStr + "T00:00:00Z");
+      const rate = await fx(agg.currency);
+      const totalSalesUsd = (agg.totalSales * rate).toFixed(4);
       await tx.shopifyDailyMetric.upsert({
         where: { tenantId_date: { tenantId: ctx.tenantId, date } },
         update: {
-          totalSales: agg.totalSales.toFixed(2),
+          totalSales: totalSalesUsd,
           orders: agg.orders,
-          currency: agg.currency,
+          currency: "USD",
           fetchedAt: new Date(),
         },
         create: {
           tenantId: ctx.tenantId,
           date,
-          totalSales: agg.totalSales.toFixed(2),
+          totalSales: totalSalesUsd,
           orders: agg.orders,
           returns: 0,
-          currency: agg.currency,
+          currency: "USD",
         },
       });
       upserted++;

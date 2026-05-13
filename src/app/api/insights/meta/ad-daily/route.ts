@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
 import { MetaAdDailyRow, LenientEnvelope, parseRowsLenient } from "@/lib/insights/schemas";
+import { makeFxLookup, mulMoney, mulMoneyOpt } from "@/lib/insights/fx";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
@@ -19,9 +20,15 @@ export async function POST(req: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const { valid: rows, skipped, errorSamples } = parseRowsLenient(MetaAdDailyRow, env.data.rows);
 
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
+      const rate = await fx(r.currency);
+      const spend = mulMoney(r.spend, rate);
+      const purchaseConvValue = mulMoney(r.purchase_conv_value, rate);
+      const cpm = mulMoneyOpt(r.cpm, rate);
+      const cpcAll = mulMoneyOpt(r.cpc_all, rate);
       await tx.metaAdDaily.upsert({
         where: {
           tenantId_date_adId: {
@@ -40,11 +47,11 @@ export async function POST(req: Request) {
           adBody: r.ad_body ?? null,
           impressions: r.impressions,
           clicksAll: r.clicks_all,
-          spend: r.spend,
+          spend,
           websitePurchases: r.website_purchases,
-          purchaseConvValue: r.purchase_conv_value,
-          cpm: r.cpm ?? null,
-          cpcAll: r.cpc_all ?? null,
+          purchaseConvValue,
+          cpm,
+          cpcAll,
           ctrAll: r.ctr_all ?? null,
           roas: r.roas ?? null,
           fetchedAt: new Date(),
@@ -62,11 +69,11 @@ export async function POST(req: Request) {
           adBody: r.ad_body ?? null,
           impressions: r.impressions,
           clicksAll: r.clicks_all,
-          spend: r.spend,
+          spend,
           websitePurchases: r.website_purchases,
-          purchaseConvValue: r.purchase_conv_value,
-          cpm: r.cpm ?? null,
-          cpcAll: r.cpc_all ?? null,
+          purchaseConvValue,
+          cpm,
+          cpcAll,
           ctrAll: r.ctr_all ?? null,
           roas: r.roas ?? null,
         },

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
 import { GoogleCampaignTypeRow, LenientEnvelope, parseRowsLenient } from "@/lib/insights/schemas";
+import { makeFxLookup, mulMoney } from "@/lib/insights/fx";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
@@ -19,9 +20,13 @@ export async function POST(req: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const { valid: rows, skipped, errorSamples } = parseRowsLenient(GoogleCampaignTypeRow, env.data.rows);
 
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
+      const rate = await fx(r.currency);
+      const cost = mulMoney(r.cost, rate);
+      const totalConvValue = mulMoney(r.total_conv_value, rate);
       await tx.googleCampaignTypeDaily.upsert({
         where: {
           tenantId_customerId_date_campaignType: {
@@ -34,9 +39,9 @@ export async function POST(req: Request) {
         update: {
           customerName: r.customer_name,
           clicks: r.clicks,
-          cost: r.cost,
+          cost,
           purchases: r.purchases,
-          totalConvValue: r.total_conv_value,
+          totalConvValue,
           roas: r.roas ?? null,
           fetchedAt: new Date(),
         },
@@ -47,9 +52,9 @@ export async function POST(req: Request) {
           date: r.date,
           campaignType: r.campaign_type,
           clicks: r.clicks,
-          cost: r.cost,
+          cost,
           purchases: r.purchases,
-          totalConvValue: r.total_conv_value,
+          totalConvValue,
           roas: r.roas ?? null,
         },
       });

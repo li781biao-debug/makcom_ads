@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma-project/client";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
 import { MetaBreakdownDailyRow, LenientEnvelope, parseRowsLenient } from "@/lib/insights/schemas";
+import { makeFxLookup, mulMoney } from "@/lib/insights/fx";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
@@ -20,11 +21,15 @@ export async function POST(req: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const { valid: rows, skipped, errorSamples } = parseRowsLenient(MetaBreakdownDailyRow, env.data.rows);
 
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
       const dimMeta =
         r.dim_meta == null ? Prisma.DbNull : (r.dim_meta as Prisma.InputJsonValue);
+      const rate = await fx(r.currency);
+      const spend = mulMoney(r.spend, rate);
+      const purchaseConvValue = mulMoney(r.purchase_conv_value, rate);
       await tx.metaBreakdownDaily.upsert({
         where: {
           tenantId_accountId_date_breakdownType_dim1_dim2: {
@@ -41,9 +46,9 @@ export async function POST(req: Request) {
           dimMeta,
           impressions: r.impressions,
           clicksAll: r.clicks_all,
-          spend: r.spend,
+          spend,
           purchases: r.purchases,
-          purchaseConvValue: r.purchase_conv_value,
+          purchaseConvValue,
           roas: r.roas ?? null,
           fetchedAt: new Date(),
         },
@@ -58,9 +63,9 @@ export async function POST(req: Request) {
           dimMeta,
           impressions: r.impressions,
           clicksAll: r.clicks_all,
-          spend: r.spend,
+          spend,
           purchases: r.purchases,
-          purchaseConvValue: r.purchase_conv_value,
+          purchaseConvValue,
           roas: r.roas ?? null,
         },
       });

@@ -3,6 +3,7 @@ import { Prisma } from "@/generated/prisma-project/client";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
 import { GoogleBreakdownDailyRow, LenientEnvelope, parseRowsLenient } from "@/lib/insights/schemas";
+import { makeFxLookup, mulMoney, mulMoneyOpt } from "@/lib/insights/fx";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
@@ -20,11 +21,16 @@ export async function POST(req: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const { valid: rows, skipped, errorSamples } = parseRowsLenient(GoogleBreakdownDailyRow, env.data.rows);
 
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const r of rows) {
       const dimMeta =
         r.dim_meta == null ? Prisma.DbNull : (r.dim_meta as Prisma.InputJsonValue);
+      const rate = await fx(r.currency);
+      const cost = mulMoney(r.cost, rate);
+      const totalConvValue = mulMoney(r.total_conv_value, rate);
+      const allConvValue = mulMoneyOpt(r.all_conv_value ?? null, rate);
       await tx.googleBreakdownDaily.upsert({
         where: {
           tenantId_customerId_date_breakdownType_dim1_dim2: {
@@ -40,10 +46,10 @@ export async function POST(req: Request) {
           customerName: r.customer_name,
           dimMeta,
           clicks: r.clicks,
-          cost: r.cost,
+          cost,
           purchases: r.purchases,
-          totalConvValue: r.total_conv_value,
-          allConvValue: r.all_conv_value ?? null,
+          totalConvValue,
+          allConvValue,
           fetchedAt: new Date(),
         },
         create: {
@@ -56,10 +62,10 @@ export async function POST(req: Request) {
           dim2: r.dim2,
           dimMeta,
           clicks: r.clicks,
-          cost: r.cost,
+          cost,
           purchases: r.purchases,
-          totalConvValue: r.total_conv_value,
-          allConvValue: r.all_conv_value ?? null,
+          totalConvValue,
+          allConvValue,
         },
       });
       upserted++;

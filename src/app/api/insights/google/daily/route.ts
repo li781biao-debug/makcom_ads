@@ -3,6 +3,7 @@ import type { Prisma } from "@/generated/prisma-project/client";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
 import { GoogleDailyRow, LenientEnvelope, parseRowsLenient } from "@/lib/insights/schemas";
+import { makeFxLookup, mulMoney, mulMoneyOpt } from "@/lib/insights/fx";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
@@ -39,10 +40,12 @@ export async function POST(req: Request) {
     else byKey.set(key, [r]);
   }
 
+  const fx = makeFxLookup();
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
     for (const [, group] of byKey) {
       const first = group[0];
+      const rate = await fx(first.currency);
       const hasCategory = group.some((g) => g.conversion_action_category != null);
       const hasTrafficRow = group.some(
         (g) => g.conversion_action_category == null,
@@ -125,12 +128,12 @@ export async function POST(req: Request) {
       if (updateTraffic && trafficRow) {
         update.impressions = trafficRow.impressions;
         update.clicks = trafficRow.clicks;
-        update.cost = trafficRow.cost;
-        update.avgCpc = trafficRow.avg_cpc ?? null;
+        update.cost = mulMoney(trafficRow.cost, rate);
+        update.avgCpc = mulMoneyOpt(trafficRow.avg_cpc, rate);
         update.ctr = trafficRow.ctr ?? null;
       }
       if (updateConversions) {
-        update.totalConvValue = totalConvValue;
+        update.totalConvValue = mulMoney(totalConvValue, rate);
         update.purchases = purchases;
         update.addsToCart = addsToCart;
         update.beginsCheckout = beginsCheckout;
@@ -152,10 +155,10 @@ export async function POST(req: Request) {
           date: first.date,
           impressions: trafficRow?.impressions ?? BigInt(0),
           clicks: trafficRow?.clicks ?? BigInt(0),
-          cost: trafficRow?.cost ?? "0",
-          avgCpc: trafficRow?.avg_cpc ?? null,
+          cost: mulMoney(trafficRow?.cost ?? "0", rate),
+          avgCpc: mulMoneyOpt(trafficRow?.avg_cpc ?? null, rate),
           ctr: trafficRow?.ctr ?? null,
-          totalConvValue: updateConversions ? totalConvValue : "0",
+          totalConvValue: updateConversions ? mulMoney(totalConvValue, rate) : "0",
           purchases: updateConversions ? purchases : 0,
           addsToCart: updateConversions ? addsToCart : 0,
           beginsCheckout: updateConversions ? beginsCheckout : 0,

@@ -123,6 +123,17 @@ model TenantUser {
   @@index([userId])
 }
 
+// ===== Currency conversion =====
+// Static FX rates used at INSERT time to normalise inbound spend/value to USD.
+// Make scenarios send native currency + a `currency` field; the route
+// multiplies money columns by rateToUsd before upserting. Reads stay simple
+// (everything in the project DBs is USD).
+model FxRate {
+  currency  String   @id @db.VarChar(8)
+  rateToUsd Decimal  @db.Decimal(20, 10) @default(1.0)
+  updatedAt DateTime @updatedAt
+}
+
 // ===== OAuth state nonce (Meta connect flow) =====
 
 model OAuthState {
