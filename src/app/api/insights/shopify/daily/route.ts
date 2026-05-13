@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject, type ProjectContext } from "@/lib/insights/projectResolve";
 import {
-  ShopifyDailyEnvelope,
+  ShopifyDailyRow,
   ShopifyOrdersEnvelope,
+  LenientEnvelope,
+  parseRowsLenient,
   type ShopifyOrderRawT,
 } from "@/lib/insights/schemas";
 
@@ -27,16 +29,16 @@ export async function POST(req: Request) {
     return handleRawOrders(ctx, parsed.data.orders);
   }
 
-  const parsed = ShopifyDailyEnvelope.safeParse(json);
-  if (!parsed.success) {
+  const env = LenientEnvelope.safeParse(json);
+  if (!env.success) {
     return NextResponse.json(
-      { ok: false, error: { code: "INVALID_BODY", message: parsed.error.message } },
+      { ok: false, error: { code: "INVALID_BODY", message: env.error.message } },
       { status: 400 },
     );
   }
-  const ctx = await resolveProject(parsed.data);
+  const ctx = await resolveProject(env.data);
   if (ctx instanceof NextResponse) return ctx;
-  const { rows } = parsed.data;
+  const { valid: rows, skipped, errorSamples } = parseRowsLenient(ShopifyDailyRow, env.data.rows);
 
   let upserted = 0;
   await ctx.client.$transaction(async (tx) => {
@@ -63,7 +65,10 @@ export async function POST(req: Request) {
     }
   });
 
-  return NextResponse.json({ ok: true, data: { upserted } });
+  return NextResponse.json({
+    ok: true,
+    data: { upserted, skipped, ...(errorSamples.length ? { errorSamples } : {}) },
+  });
 }
 
 async function handleRawOrders(ctx: ProjectContext, orders: ShopifyOrderRawT[]) {

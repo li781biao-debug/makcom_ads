@@ -2,23 +2,23 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@/generated/prisma-project/client";
 import { verifyMakeSecret } from "@/lib/insights/auth";
 import { resolveProject } from "@/lib/insights/projectResolve";
-import { GoogleDailyEnvelope } from "@/lib/insights/schemas";
+import { GoogleDailyRow, LenientEnvelope, parseRowsLenient } from "@/lib/insights/schemas";
 
 export async function POST(req: Request) {
   const unauthorized = verifyMakeSecret(req);
   if (unauthorized) return unauthorized;
 
   const json = await req.json().catch(() => null);
-  const parsed = GoogleDailyEnvelope.safeParse(json);
-  if (!parsed.success) {
+  const env = LenientEnvelope.safeParse(json);
+  if (!env.success) {
     return NextResponse.json(
-      { ok: false, error: { code: "INVALID_BODY", message: parsed.error.message } },
+      { ok: false, error: { code: "INVALID_BODY", message: env.error.message } },
       { status: 400 },
     );
   }
-  const ctx = await resolveProject(parsed.data);
+  const ctx = await resolveProject(env.data);
   if (ctx instanceof NextResponse) return ctx;
-  const { rows } = parsed.data;
+  const { valid: rows, skipped, errorSamples } = parseRowsLenient(GoogleDailyRow, env.data.rows);
 
   // Group rows by date. Google's API forbids mixing
   // `segments.conversion_action_category` with traffic metrics in one GAQL,
@@ -165,5 +165,8 @@ export async function POST(req: Request) {
     }
   });
 
-  return NextResponse.json({ ok: true, data: { upserted } });
+  return NextResponse.json({
+    ok: true,
+    data: { upserted, skipped, ...(errorSamples.length ? { errorSamples } : {}) },
+  });
 }

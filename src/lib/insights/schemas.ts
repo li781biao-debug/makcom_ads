@@ -103,6 +103,50 @@ const RowEnvelope = <T extends z.ZodTypeAny>(row: T) =>
       message: "tenant_id or project_slug required",
     });
 
+// Lenient envelope: validates the top-level shape but leaves each row raw
+// so the route can parse them one-by-one and skip the bad ones rather than
+// reject the whole batch. Pair with `parseRowsLenient`.
+export const LenientEnvelope = z
+  .object({
+    tenant_id: z.string().optional(),
+    project_slug: z.string().optional(),
+    rows: z.array(z.unknown()).min(1).max(10000),
+  })
+  .refine((d) => !!(d.tenant_id || d.project_slug), {
+    message: "tenant_id or project_slug required",
+  });
+
+/**
+ * Validate each row independently; collect parsed-good rows and a count of
+ * skipped ones (with a few error samples for the response so the caller can
+ * see what was wrong without flooding logs).
+ */
+export function parseRowsLenient<T extends z.ZodTypeAny>(
+  rowSchema: T,
+  rawRows: unknown[],
+): {
+  valid: z.infer<T>[];
+  skipped: number;
+  errorSamples: Array<{ index: number; message: string }>;
+} {
+  const valid: z.infer<T>[] = [];
+  const errorSamples: Array<{ index: number; message: string }> = [];
+  for (let i = 0; i < rawRows.length; i++) {
+    const p = rowSchema.safeParse(rawRows[i]);
+    if (p.success) {
+      valid.push(p.data);
+    } else if (errorSamples.length < 5) {
+      // Keep the first 5 errors as a sample; flatten message stays compact.
+      const issue = p.error.issues[0];
+      errorSamples.push({
+        index: i,
+        message: `${issue?.path?.join(".") ?? "(root)"}: ${issue?.message ?? "invalid"}`,
+      });
+    }
+  }
+  return { valid, skipped: rawRows.length - valid.length, errorSamples };
+}
+
 // Meta API actions[] / action_values[] item shape
 // Meta returns each action with action_type + optional value. With per-window
 // attribution (7d_click / 1d_view) enabled, some action rows split values into
