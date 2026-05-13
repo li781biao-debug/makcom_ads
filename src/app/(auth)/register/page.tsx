@@ -9,7 +9,6 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [tenantName, setTenantName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -20,7 +19,7 @@ export default function RegisterPage() {
     const res = await fetch("/api/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password, name, tenantName }),
+      body: JSON.stringify({ email, password, name }),
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
@@ -30,17 +29,16 @@ export default function RegisterPage() {
     }
     await signIn("credentials", { email, password, redirect: false });
     setLoading(false);
-    router.push("/");
+    router.push("/apply");
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-zinc-950 px-4">
       <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4 bg-white dark:bg-zinc-900 p-8 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-800">
         <h1 className="text-2xl font-semibold">注册</h1>
-        <div className="space-y-2">
-          <label className="block text-sm">工作区名称</label>
-          <input required value={tenantName} onChange={(e) => setTenantName(e.target.value)} placeholder="e.g. My Agency" className="w-full rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-3 py-2" />
-        </div>
+        <p className="text-sm text-zinc-500">
+          注册后默认无项目权限，需在 "申请项目权限" 中提交申请，经管理员审核通过后才能查看项目数据。
+        </p>
         <div className="space-y-2">
           <label className="block text-sm">姓名</label>
           <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded border border-zinc-300 dark:border-zinc-700 bg-transparent px-3 py-2" />

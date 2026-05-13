@@ -14,16 +14,24 @@ datasource db {
 
 // ===== Auth / Multi-tenancy =====
 
+enum UserRole {
+  USER         // regular user — must request + be granted access per project
+  SUPER_ADMIN  // can view all projects, approve/reject access requests
+}
+
 model User {
   id            String   @id @default(cuid())
   email         String   @unique
   passwordHash  String
   name          String?
+  role          UserRole @default(USER)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  memberships   TenantUser[]
-  auditLogs     AuditLog[]
+  memberships          TenantUser[]
+  auditLogs            AuditLog[]
+  accessRequests       ProjectAccessRequest[] @relation("requester")
+  reviewedRequests     ProjectAccessRequest[] @relation("reviewer")
 }
 
 // A "tenant" represents a project — has its own dedicated database (dbName).
@@ -41,6 +49,31 @@ model Tenant {
   members        TenantUser[]
   auditLogs      AuditLog[]
   makeJobs       MakeJob[]
+  accessRequests ProjectAccessRequest[]
+}
+
+// ===== Project access requests =====
+// A regular USER applies for a project; a SUPER_ADMIN approves or rejects.
+// On approve, a TenantUser row is created and the request is marked approved.
+
+model ProjectAccessRequest {
+  id          String    @id @default(cuid())
+  userId      String
+  tenantId    String
+  status      String    @default("pending")  // pending | approved | rejected
+  message     String?   @db.Text             // optional note from the requester
+  reviewNote  String?   @db.Text             // optional note from the reviewer
+  requestedAt DateTime  @default(now())
+  reviewedAt  DateTime?
+  reviewerId  String?
+
+  user     User    @relation("requester", fields: [userId], references: [id], onDelete: Cascade)
+  reviewer User?   @relation("reviewer",  fields: [reviewerId], references: [id], onDelete: SetNull)
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([status, requestedAt])
+  @@index([tenantId, status])
 }
 
 enum TenantRole {

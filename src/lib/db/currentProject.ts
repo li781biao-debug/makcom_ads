@@ -51,11 +51,16 @@ export async function setCurrentProjectCookie(slug: string) {
 }
 
 /**
- * Resolve project by slug + verify user is a member (defense-in-depth).
+ * Resolve project by slug + verify user has access (member, or SUPER_ADMIN).
  */
 export async function assertUserProject(userId: string, slug: string) {
   const tenant = await basePrisma.tenant.findUnique({ where: { slug } });
   if (!tenant) return null;
+  const user = await basePrisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  if (user?.role === "SUPER_ADMIN") return tenant;
   const member = await basePrisma.tenantUser.findUnique({
     where: { tenantId_userId: { tenantId: tenant.id, userId } },
   });

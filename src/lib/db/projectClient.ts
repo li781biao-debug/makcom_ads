@@ -33,8 +33,20 @@ export async function resolveProjectById(id: string) {
   return basePrisma.tenant.findUnique({ where: { id } });
 }
 
-// Returns Tenant rows the user has access to, ordered by createdAt asc (first joined wins as default).
+// Returns Tenant rows the user has access to. SUPER_ADMIN sees every active
+// tenant; regular USER sees only tenants where they have an approved
+// TenantUser membership.
 export async function listUserProjects(userId: string) {
+  const user = await basePrisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  if (user?.role === "SUPER_ADMIN") {
+    return basePrisma.tenant.findMany({
+      where: { status: "active" },
+      orderBy: { createdAt: "asc" },
+    });
+  }
   const memberships = await basePrisma.tenantUser.findMany({
     where: { userId },
     include: { tenant: true },
@@ -43,4 +55,13 @@ export async function listUserProjects(userId: string) {
   return memberships
     .map((m) => m.tenant)
     .filter((t) => t.status === "active");
+}
+
+// True if the user is a SUPER_ADMIN (cached per request via Next/React data cache).
+export async function isSuperAdmin(userId: string): Promise<boolean> {
+  const u = await basePrisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  return u?.role === "SUPER_ADMIN";
 }

@@ -34,8 +34,11 @@ export default async function MetaReportPage({
   const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
   if (!project) {
     return (
-      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500">
-        当前账号没有任何项目权限，请联系管理员分配。
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500 space-y-4">
+        <div>当前账号没有任何已审核通过的项目权限。</div>
+        <a href="/apply" className="inline-block rounded bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-700">
+          去申请项目权限
+        </a>
       </div>
     );
   }
