@@ -1,16 +1,19 @@
 import { auth } from "@/auth";
-import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { resolveCurrentView } from "@/lib/db/currentView";
 import { projectClient } from "@/lib/db/projectClient";
 import {
   resolveRange,
   previousRange,
   pctDelta,
   metaAggregate,
+  metaAggregateMulti,
   metaDailySeries,
+  metaDailySeriesMulti,
   topMetaCampaigns,
   topMetaCreatives,
   metaBreakdownTop,
   lastFetchedAt,
+  lastFetchedAtMulti,
   listMetaAccounts,
   sumNumeric,
   type ProjectQueryContext,
@@ -31,8 +34,8 @@ export default async function MetaReportPage({
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
   const params = await searchParams;
-  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
-  if (!project) {
+  const { view } = await resolveCurrentView({ userId, urlSlug: params.project ?? null });
+  if (!view) {
     return (
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500 space-y-4">
         <div>当前账号没有任何已审核通过的项目权限。</div>
@@ -43,6 +46,14 @@ export default async function MetaReportPage({
     );
   }
 
+  // ---- Group mode: aggregated KPIs + per-project contribution. Drill-down
+  // tables (campaigns / breakdowns / creatives) are hidden because they don't
+  // aggregate sensibly across disjoint projects. ----
+  if (view.kind === "group") {
+    return <MetaGroupView group={view.group} params={params} />;
+  }
+
+  const project = view.project;
   const client = projectClient(project.dbName);
   const accountId = params.meta_account || null;
   const ctx: ProjectQueryContext = {
@@ -432,4 +443,124 @@ function mapToSlices(m: Map<string, number>) {
     .sort((a, b) => b[1] - a[1]);
   const colors = autoColors(entries.length);
   return entries.map(([label, value], i) => ({ label, value, color: colors[i] }));
+}
+
+// ---- Group view: aggregated Meta KPIs across all member projects ----
+type GroupProject = { id: string; slug: string; name: string; dbName: string };
+type MetaGroupProps = {
+  group: { id: string; slug: string; name: string; projects: GroupProject[] };
+  params: { days?: string; from?: string; to?: string; project?: string };
+};
+
+type MetaProjectRow = {
+  projectName: string;
+  spend: number;
+  convValue: number;
+  purchases: number;
+  addsToCart: number;
+  initiatedCheckouts: number;
+  roas: number;
+};
+
+async function MetaGroupView({ group, params }: MetaGroupProps) {
+  const ctxs: ProjectQueryContext[] = group.projects.map((p) => ({
+    client: projectClient(p.dbName),
+    tenantId: p.id,
+  }));
+  const { range, days, from, to } = resolveRange(params);
+  const prev = previousRange(range);
+
+  const [meta, prevMeta, series, fresh, perProject] = await Promise.all([
+    metaAggregateMulti(ctxs, range),
+    metaAggregateMulti(ctxs, prev),
+    metaDailySeriesMulti(ctxs, range),
+    lastFetchedAtMulti(ctxs),
+    Promise.all(group.projects.map(async (p) => {
+      const c: ProjectQueryContext = { client: projectClient(p.dbName), tenantId: p.id };
+      const m = await metaAggregate(c, range);
+      return {
+        projectName: p.name,
+        spend: m.spend,
+        convValue: m.purchaseConvValue,
+        purchases: m.purchases,
+        addsToCart: m.addsToCart,
+        initiatedCheckouts: m.initiatedCheckouts,
+        roas: m.roas,
+      } satisfies MetaProjectRow;
+    })),
+  ]);
+
+  const projectCols: Col<MetaProjectRow>[] = [
+    { key: "project", header: "项目", render: (r) => r.projectName },
+    { key: "spend", header: "Spend", align: "right", render: (r) => fmtMoney(r.spend) },
+    { key: "convValue", header: "Purchase conv. value", align: "right", render: (r) => fmtMoney(r.convValue) },
+    { key: "purchases", header: "Omni purchases", align: "right", render: (r) => fmtNumber(r.purchases) },
+    { key: "atc", header: "Omni ATC", align: "right", render: (r) => fmtNumber(r.addsToCart) },
+    { key: "ic", header: "Omni IC", align: "right", render: (r) => fmtNumber(r.initiatedCheckouts) },
+    { key: "roas", header: "ROAS", align: "right", render: (r) => r.roas.toFixed(2) },
+  ];
+  const projectTotal: MetaProjectRow = {
+    projectName: "总计",
+    spend: meta.spend,
+    convValue: meta.purchaseConvValue,
+    purchases: meta.purchases,
+    addsToCart: meta.addsToCart,
+    initiatedCheckouts: meta.initiatedCheckouts,
+    roas: meta.roas,
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports/meta" projectSlug={group.slug} />
+        <Freshness meta={fresh.meta} />
+      </div>
+      <div className="text-xs text-zinc-500">
+        合计视图 · {group.projects.length} 个项目 · 所有金额已统一为 USD · 单项目下钻请切换具体项目查看
+      </div>
+
+      <section>
+        <div className="text-xs text-zinc-500 mb-3">Including data from Facebook, Instagram, Messenger, WhatsApp and Threads</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Kpi label="Purchase conversion value" value={fmtCompact(meta.purchaseConvValue)} delta={pctDelta(meta.purchaseConvValue, prevMeta.purchaseConvValue)} />
+          <Kpi label="Amount spent" value={fmtCompact(meta.spend)} delta={pctDelta(meta.spend, prevMeta.spend)} />
+          <Kpi label="ROAS" value={meta.roas.toFixed(2)} delta={pctDelta(meta.roas, prevMeta.roas)} />
+          <Kpi label="Avg. order value"
+            value={fmtMoney(meta.purchases > 0 ? meta.purchaseConvValue / meta.purchases : 0)}
+            delta={null} />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mt-3">
+          <Kpi size="sm" label="Omni adds to cart" value={fmtCompact(meta.addsToCart)} delta={pctDelta(meta.addsToCart, prevMeta.addsToCart)} />
+          <Kpi size="sm" label="Omni initiated checkouts" value={fmtCompact(meta.initiatedCheckouts)} delta={pctDelta(meta.initiatedCheckouts, prevMeta.initiatedCheckouts)} />
+          <Kpi size="sm" label="Omni purchases" value={fmtCompact(meta.purchases)} delta={pctDelta(meta.purchases, prevMeta.purchases)} />
+          <Kpi size="sm" label="Impressions" value={fmtCompact(meta.impressions)} delta={pctDelta(meta.impressions, prevMeta.impressions)} />
+          <Kpi size="sm" label="Clicks (all)" value={fmtCompact(meta.clicks)} delta={pctDelta(meta.clicks, prevMeta.clicks)} />
+          <Kpi size="sm" label="CPC (all)" value={meta.cpc.toFixed(2)} delta={null} />
+          <Kpi size="sm" label="CPM" value={meta.cpm.toFixed(0)} delta={null} />
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-base font-medium mb-3">Meta ads conv. value vs cost</h2>
+        <LineChart
+          labels={series.map((s) => s.date)}
+          series={[
+            { name: "Conv. value", color: "#3b82f6", values: series.map((s) => s.v1) },
+            { name: "Cost", color: "#10b981", values: series.map((s) => s.v2) },
+          ]}
+        />
+      </section>
+
+      <section>
+        <DataTable
+          title="各项目贡献"
+          rows={perProject}
+          cols={projectCols}
+          identity={(r) => r.projectName}
+          totalsRow={projectTotal}
+          maxHeight={500}
+        />
+      </section>
+    </div>
+  );
 }

@@ -1,15 +1,18 @@
 import { auth } from "@/auth";
-import { resolveCurrentProject } from "@/lib/db/currentProject";
+import { resolveCurrentView } from "@/lib/db/currentView";
 import { projectClient } from "@/lib/db/projectClient";
 import {
   resolveRange,
   previousRange,
   pctDelta,
   googleAggregate,
+  googleAggregateMulti,
   googleDailySeries,
+  googleDailySeriesMulti,
   googleCampaignTypeAggregate,
   googleBreakdownTop,
   lastFetchedAt,
+  lastFetchedAtMulti,
   listGoogleAccounts,
   sumNumeric,
   type ProjectQueryContext,
@@ -30,8 +33,8 @@ export default async function GoogleReportPage({
   const session = await auth();
   const userId = (session!.user as { id?: string }).id!;
   const params = await searchParams;
-  const { project } = await resolveCurrentProject({ userId, urlSlug: params.project ?? null });
-  if (!project) {
+  const { view } = await resolveCurrentView({ userId, urlSlug: params.project ?? null });
+  if (!view) {
     return (
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-12 text-center text-zinc-500 space-y-4">
         <div>当前账号没有任何已审核通过的项目权限。</div>
@@ -42,6 +45,11 @@ export default async function GoogleReportPage({
     );
   }
 
+  if (view.kind === "group") {
+    return <GoogleGroupView group={view.group} params={params} />;
+  }
+
+  const project = view.project;
   const client = projectClient(project.dbName);
   const customerId = params.google_account || null;
   const ctx: ProjectQueryContext = {
@@ -376,4 +384,123 @@ function bkToSlices(rows: Array<{ dim1: string; totalConvValue: number }>) {
     value: r.totalConvValue,
     color: colors[i],
   }));
+}
+
+// ---- Group view: aggregated Google KPIs across all member projects ----
+type GroupProject = { id: string; slug: string; name: string; dbName: string };
+type GoogleGroupProps = {
+  group: { id: string; slug: string; name: string; projects: GroupProject[] };
+  params: { days?: string; from?: string; to?: string; project?: string };
+};
+
+type GoogleProjectRow = {
+  projectName: string;
+  cost: number;
+  convValue: number;
+  purchases: number;
+  addsToCart: number;
+  beginsCheckout: number;
+  roas: number;
+};
+
+async function GoogleGroupView({ group, params }: GoogleGroupProps) {
+  const ctxs: ProjectQueryContext[] = group.projects.map((p) => ({
+    client: projectClient(p.dbName),
+    tenantId: p.id,
+  }));
+  const { range, days, from, to } = resolveRange(params);
+  const prev = previousRange(range);
+
+  const [google, prevGoogle, series, fresh, perProject] = await Promise.all([
+    googleAggregateMulti(ctxs, range),
+    googleAggregateMulti(ctxs, prev),
+    googleDailySeriesMulti(ctxs, range),
+    lastFetchedAtMulti(ctxs),
+    Promise.all(group.projects.map(async (p) => {
+      const c: ProjectQueryContext = { client: projectClient(p.dbName), tenantId: p.id };
+      const g = await googleAggregate(c, range);
+      return {
+        projectName: p.name,
+        cost: g.cost,
+        convValue: g.totalConvValue,
+        purchases: g.purchases,
+        addsToCart: g.addsToCart,
+        beginsCheckout: g.beginsCheckout,
+        roas: g.roas,
+      } satisfies GoogleProjectRow;
+    })),
+  ]);
+
+  const projectCols: Col<GoogleProjectRow>[] = [
+    { key: "project", header: "项目", render: (r) => r.projectName },
+    { key: "cost", header: "Cost", align: "right", render: (r) => fmtMoney(r.cost) },
+    { key: "convValue", header: "Conv. value", align: "right", render: (r) => fmtMoney(r.convValue) },
+    { key: "purchases", header: "Purchase", align: "right", render: (r) => fmtNumber(r.purchases) },
+    { key: "atc", header: "Add to cart", align: "right", render: (r) => fmtNumber(r.addsToCart) },
+    { key: "bic", header: "Begin checkout", align: "right", render: (r) => fmtNumber(r.beginsCheckout) },
+    { key: "roas", header: "ROAS", align: "right", render: (r) => r.roas.toFixed(2) },
+  ];
+  const projectTotal: GoogleProjectRow = {
+    projectName: "总计",
+    cost: google.cost,
+    convValue: google.totalConvValue,
+    purchases: google.purchases,
+    addsToCart: google.addsToCart,
+    beginsCheckout: google.beginsCheckout,
+    roas: google.roas,
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <DateRangeBar active={days} from={from} to={to} basePath="/reports/google" projectSlug={group.slug} />
+        <Freshness google={fresh.google} />
+      </div>
+      <div className="text-xs text-zinc-500">
+        合计视图 · {group.projects.length} 个项目 · 所有金额已统一为 USD · 单项目下钻请切换具体项目查看
+      </div>
+
+      <section>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Kpi label="Total conv. value" value={fmtCompact(google.totalConvValue)} delta={pctDelta(google.totalConvValue, prevGoogle.totalConvValue)} />
+          <Kpi label="Cost" value={fmtCompact(google.cost)} delta={pctDelta(google.cost, prevGoogle.cost)} />
+          <Kpi label="Conv. value / cost" value={google.roas.toFixed(2)} delta={pctDelta(google.roas, prevGoogle.roas)} />
+          <Kpi label="Value / all conv."
+            value={(google.purchases > 0 ? google.totalConvValue / google.purchases : 0).toFixed(0)}
+            delta={null} />
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mt-3">
+          <Kpi size="sm" label="Add to cart" value={fmtCompact(google.addsToCart)} delta={pctDelta(google.addsToCart, prevGoogle.addsToCart)} />
+          <Kpi size="sm" label="Begin checkout" value={fmtCompact(google.beginsCheckout)} delta={pctDelta(google.beginsCheckout, prevGoogle.beginsCheckout)} />
+          <Kpi size="sm" label="Purchase" value={fmtCompact(google.purchases)} delta={pctDelta(google.purchases, prevGoogle.purchases)} />
+          <Kpi size="sm" label="Impressions" value={fmtCompact(google.impressions)} delta={pctDelta(google.impressions, prevGoogle.impressions)} />
+          <Kpi size="sm" label="Clicks" value={fmtCompact(google.clicks)} delta={pctDelta(google.clicks, prevGoogle.clicks)} />
+          <Kpi size="sm" label="Avg. CPC" value={google.cpc.toFixed(2)} delta={null} />
+          <Kpi size="sm" label="CTR" value={fmtPct(google.ctr, 2)} delta={null} />
+        </div>
+      </section>
+
+      <section>
+        <h2 className="text-base font-medium mb-3">Google ads conv. value vs cost</h2>
+        <LineChart
+          labels={series.map((s) => s.date)}
+          series={[
+            { name: "Conv. value", color: "#3b82f6", values: series.map((s) => s.v1) },
+            { name: "Cost", color: "#10b981", values: series.map((s) => s.v2) },
+          ]}
+        />
+      </section>
+
+      <section>
+        <DataTable
+          title="各项目贡献"
+          rows={perProject}
+          cols={projectCols}
+          identity={(r) => r.projectName}
+          totalsRow={projectTotal}
+          maxHeight={500}
+        />
+      </section>
+    </div>
+  );
 }

@@ -66,6 +66,111 @@ export function pctDelta(curr: number, prev: number): number | null {
 const dec = (v: Prisma.Decimal | null | undefined) => Number(v ?? 0);
 const big = (v: bigint | null | undefined) => Number(v ?? BigInt(0));
 
+// ---- Cross-project aggregation ----
+// For a project-group view (e.g. "WOMO 全部门店") we call each member
+// project's queries in parallel, then sum the results in JS. Stored values
+// are all assumed to be in USD (Make scenarios normalise before ingest).
+
+export async function shopifyAggregateMulti(ctxs: ProjectQueryContext[], r: DateRange) {
+  const arr = await Promise.all(ctxs.map((c) => shopifyAggregate(c, r)));
+  const totalSales = arr.reduce((a, x) => a + x.totalSales, 0);
+  const orders = arr.reduce((a, x) => a + x.orders, 0);
+  const returns = arr.reduce((a, x) => a + x.returns, 0);
+  return {
+    totalSales,
+    orders,
+    returns,
+    avgOrderValue: orders > 0 ? totalSales / orders : 0,
+  };
+}
+
+export async function metaAggregateMulti(ctxs: ProjectQueryContext[], r: DateRange) {
+  const arr = await Promise.all(ctxs.map((c) => metaAggregate(c, r)));
+  const impressions = arr.reduce((a, x) => a + x.impressions, 0);
+  const clicks = arr.reduce((a, x) => a + x.clicks, 0);
+  const spend = arr.reduce((a, x) => a + x.spend, 0);
+  const purchases = arr.reduce((a, x) => a + x.purchases, 0);
+  const purchaseConvValue = arr.reduce((a, x) => a + x.purchaseConvValue, 0);
+  const addsToCart = arr.reduce((a, x) => a + x.addsToCart, 0);
+  const initiatedCheckouts = arr.reduce((a, x) => a + x.initiatedCheckouts, 0);
+  return {
+    impressions,
+    clicks,
+    spend,
+    purchases,
+    purchaseConvValue,
+    addsToCart,
+    initiatedCheckouts,
+    roas: spend > 0 ? purchaseConvValue / spend : 0,
+    cpm: impressions > 0 ? (spend / impressions) * 1000 : 0,
+    cpc: clicks > 0 ? spend / clicks : 0,
+    ctr: impressions > 0 ? clicks / impressions : 0,
+  };
+}
+
+export async function googleAggregateMulti(ctxs: ProjectQueryContext[], r: DateRange) {
+  const arr = await Promise.all(ctxs.map((c) => googleAggregate(c, r)));
+  const impressions = arr.reduce((a, x) => a + x.impressions, 0);
+  const clicks = arr.reduce((a, x) => a + x.clicks, 0);
+  const cost = arr.reduce((a, x) => a + x.cost, 0);
+  const totalConvValue = arr.reduce((a, x) => a + x.totalConvValue, 0);
+  const purchases = arr.reduce((a, x) => a + x.purchases, 0);
+  const addsToCart = arr.reduce((a, x) => a + x.addsToCart, 0);
+  const beginsCheckout = arr.reduce((a, x) => a + x.beginsCheckout, 0);
+  return {
+    impressions,
+    clicks,
+    cost,
+    totalConvValue,
+    purchases,
+    addsToCart,
+    beginsCheckout,
+    roas: cost > 0 ? totalConvValue / cost : 0,
+    cpc: clicks > 0 ? cost / clicks : 0,
+    ctr: impressions > 0 ? clicks / impressions : 0,
+  };
+}
+
+// Per-project daily series rolled up date-by-date.
+async function dailySeriesMulti(
+  fetchers: Array<() => Promise<DailyPoint[]>>,
+): Promise<DailyPoint[]> {
+  const arrs = await Promise.all(fetchers.map((f) => f()));
+  const byDate = new Map<string, { v1: number; v2: number }>();
+  for (const arr of arrs) {
+    for (const r of arr) {
+      const e = byDate.get(r.date) ?? { v1: 0, v2: 0 };
+      e.v1 += r.v1;
+      e.v2 += r.v2;
+      byDate.set(r.date, e);
+    }
+  }
+  return Array.from(byDate.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, v]) => ({ date, v1: v.v1, v2: v.v2 }));
+}
+
+export async function shopifyDailySeriesMulti(ctxs: ProjectQueryContext[], r: DateRange) {
+  return dailySeriesMulti(ctxs.map((c) => () => shopifyDailySeries(c, r)));
+}
+export async function metaDailySeriesMulti(ctxs: ProjectQueryContext[], r: DateRange) {
+  return dailySeriesMulti(ctxs.map((c) => () => metaDailySeries(c, r)));
+}
+export async function googleDailySeriesMulti(ctxs: ProjectQueryContext[], r: DateRange) {
+  return dailySeriesMulti(ctxs.map((c) => () => googleDailySeries(c, r)));
+}
+
+// Last fetched timestamp = newest across all member projects.
+export async function lastFetchedAtMulti(ctxs: ProjectQueryContext[]) {
+  const arr = await Promise.all(ctxs.map((c) => lastFetchedAt(c)));
+  const max = (key: "shopify" | "meta" | "google") => {
+    const dates = arr.map((x) => x[key]).filter((d): d is Date => d != null);
+    if (dates.length === 0) return null;
+    return new Date(Math.max(...dates.map((d) => d.getTime())));
+  };
+  return { shopify: max("shopify"), meta: max("meta"), google: max("google") };
+}
+
 // Build a totals row by summing all numeric (number / bigint) fields across
 // the rows array. Non-numeric fields keep their base value (e.g. the label
 // for the first column = "总计"). Derived metrics like ROAS need to be

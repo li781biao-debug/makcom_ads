@@ -1,6 +1,6 @@
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
-import { listUserProjects } from "@/lib/db/projectClient";
+import { listUserViews } from "@/lib/db/currentView";
 import { ReportsTabs } from "@/components/insights/ReportsTabs";
 import { ProjectSwitcher } from "@/components/insights/ProjectSwitcher";
 
@@ -8,7 +8,7 @@ export default async function ReportsLayout({ children }: { children: React.Reac
   const session = await auth();
   const userId = (session!.user as { id?: string }).id;
   if (!userId) redirect("/login");
-  const projects = await listUserProjects(userId);
+  const { projects, groups } = await listUserViews(userId);
 
   return (
     <div className="space-y-6">
@@ -16,7 +16,8 @@ export default async function ReportsLayout({ children }: { children: React.Reac
         <h1 className="text-2xl font-semibold">数据报表</h1>
         <ProjectSwitcher
           projects={projects.map((p) => ({ id: p.id, slug: p.slug, name: p.name }))}
-          defaultSlug={projects[0]?.slug ?? null}
+          groups={groups.map((g) => ({ id: g.id, slug: g.slug, name: g.name }))}
+          defaultSlug={projects[0]?.slug ?? groups[0]?.slug ?? null}
         />
       </div>
       <ReportsTabs />

@@ -3,13 +3,15 @@
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 
 type Project = { id: string; slug: string; name: string };
+type Group = { id: string; slug: string; name: string };
 
 type Props = {
   projects: Project[];
+  groups?: Group[];
   defaultSlug: string | null;
 };
 
-export function ProjectSwitcher({ projects, defaultSlug }: Props) {
+export function ProjectSwitcher({ projects, groups = [], defaultSlug }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -29,7 +31,7 @@ export function ProjectSwitcher({ projects, defaultSlug }: Props) {
     router.refresh();
   }
 
-  if (projects.length === 0) return null;
+  if (projects.length === 0 && groups.length === 0) return null;
 
   return (
     <div className="flex items-center gap-2 text-sm">
@@ -39,11 +41,24 @@ export function ProjectSwitcher({ projects, defaultSlug }: Props) {
         onChange={(e) => onChange(e.target.value)}
         className="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm"
       >
-        {projects.map((p) => (
-          <option key={p.id} value={p.slug}>
-            {p.name} ({p.slug})
-          </option>
-        ))}
+        {groups.length > 0 && (
+          <optgroup label="合计视图">
+            {groups.map((g) => (
+              <option key={g.id} value={g.slug}>
+                📊 {g.name} ({g.slug})
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {projects.length > 0 && (
+          <optgroup label="单个项目">
+            {projects.map((p) => (
+              <option key={p.id} value={p.slug}>
+                {p.name} ({p.slug})
+              </option>
+            ))}
+          </optgroup>
+        )}
       </select>
     </div>
   );

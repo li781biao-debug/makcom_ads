@@ -46,10 +46,36 @@ model Tenant {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  members        TenantUser[]
-  auditLogs      AuditLog[]
-  makeJobs       MakeJob[]
-  accessRequests ProjectAccessRequest[]
+  members          TenantUser[]
+  auditLogs        AuditLog[]
+  makeJobs         MakeJob[]
+  accessRequests   ProjectAccessRequest[]
+  groupMemberships ProjectGroupMember[]
+}
+
+// Aggregated view across multiple projects (e.g. "WOMO 全部门店" rolls up the
+// 5 WOMO shop tenants). All stored values are assumed to be in the same base
+// currency (USD) — Make scenarios convert at ingest time.
+model ProjectGroup {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  members   ProjectGroupMember[]
+}
+
+model ProjectGroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  tenantId  String
+  createdAt DateTime @default(now())
+
+  group  ProjectGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, tenantId])
+  @@index([tenantId])
 }
 
 // ===== Project access requests =====
